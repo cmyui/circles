@@ -140,6 +140,14 @@ void draw_rounded_rect(Renderer& r,
                        f32       h,
                        f32       radius,
                        Color     color);
+void draw_rounded_rect_gradient(Renderer& r,
+                                f32       x,
+                                f32       y,
+                                f32       w,
+                                f32       h,
+                                f32       radius,
+                                Color     top,
+                                Color     bottom);
 // A disc, or a ring when `inner` (a fraction of the radius) is above 0.
 // `softness`, also a fraction of the radius, blurs the outer edge.
 void draw_circle(Renderer& r,

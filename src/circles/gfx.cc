@@ -413,13 +413,24 @@ void draw_rounded_rect(Renderer& r,
                        f32       h,
                        f32       radius,
                        Color     color) {
+  draw_rounded_rect_gradient(r, x, y, w, h, radius, color, color);
+}
+
+void draw_rounded_rect_gradient(Renderer& r,
+                                f32       x,
+                                f32       y,
+                                f32       w,
+                                f32       h,
+                                f32       radius,
+                                Color     top,
+                                Color     bottom) {
   const f32 half_w = w / 2, half_h = h / 2;
   radius = std::min({radius, half_w, half_h});
   // Extend by a point so the anti-aliased edge isn't cut off.
   constexpr f32 kMargin = 1;
   rect_quad(r, x - kMargin, y - kMargin, x + w + kMargin, y + h + kMargin,
             -half_w - kMargin, -half_h - kMargin, half_w + kMargin,
-            half_h + kMargin, color, color,
+            half_h + kMargin, top, bottom,
             {kKindRoundedRect, half_w, half_h, radius});
 }
 

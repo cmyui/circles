@@ -183,10 +183,21 @@ struct MainMenu {
 
 struct SongSelect {
   std::string      query;
-  std::vector<i32> sets;        // Library::sets matching the query
-  f32              scroll = 0;  // carousel row at the centre, animated
+  std::vector<i32> sets;  // Library::sets matching the query
+  // The carousel's position: points from the top of the list to the window's
+  // centre line, easing toward scroll_target.
+  f32              scroll = 0;
   f32              scroll_target = 0;
   i32              hovered_row = -1;
+  // Dragging with the left button scrolls, and flings on release; holding the
+  // right button on empty space jumps to the place in the list the cursor's
+  // height marks.
+  bool             left_down = false;
+  bool             dragging = false;
+  bool             right_down = false;
+  f32              drag_start_y = 0;
+  f32              drag_start_scroll = 0;
+  f32              fling = 0;  // points per second
 };
 
 // Draws slider bodies; see slider.frag.

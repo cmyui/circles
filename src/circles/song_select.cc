@@ -14,54 +14,79 @@ namespace circles {
 
 namespace {
 
-constexpr f32 kRowHeight = 64;
-constexpr f32 kRowStride = 72;
+constexpr f32 kSetHeight = 76;
+constexpr f32 kDifficultyHeight = 54;
+constexpr f32 kRowGap = 8;
+// Difficulties sit this far right of their set, on a rail joined to it.
+constexpr f32 kDifficultyIndent = 56;
+// How far a press may move before it scrolls instead of clicking.
+constexpr f32 kDragThreshold = 6;
+constexpr f32 kWheelStep = 90;  // points per scroll wheel notch
 
-// A carousel row: a set's header, or one of the selected set's difficulties.
+// A carousel row: a set, or one of the selected set's difficulties.
 struct Row {
   i32 set;
-  i32 map;  // negative for a header
+  i32 map;  // negative for a set
+  f32 top;  // points from the top of the list
+  f32 height;
+
+  f32 center() const { return top + height / 2; }
 };
 
 std::vector<Row> build_rows(const App& app) {
   std::vector<Row> rows;
   const i32        selected_set =
       app.selected_map >= 0 ? app.library.set_of_map[app.selected_map] : -1;
+  f32 top = 0;
   for (i32 set : app.select.sets) {
-    rows.push_back({set, -1});
-    if (set == selected_set)
-      for (i32 map : app.library.sets[set].maps)
-        rows.push_back({set, map});
+    rows.push_back({set, -1, top, kSetHeight});
+    top += kSetHeight + kRowGap;
+    if (set != selected_set)
+      continue;
+    for (i32 map : app.library.sets[set].maps) {
+      rows.push_back({set, map, top, kDifficultyHeight});
+      top += kDifficultyHeight + kRowGap;
+    }
   }
   return rows;
 }
 
-i32 row_of_map(const std::vector<Row>& rows, i32 map) {
-  for (size_t i = 0; i < rows.size(); ++i)
-    if (rows[i].map == map)
-      return static_cast<i32>(i);
-  return 0;
+// The furthest the list scrolls: its last row at the centre line.
+f32 scroll_limit(const std::vector<Row>& rows) {
+  return rows.empty() ? 0 : rows.back().center();
+}
+
+f32 center_line(const App& app) {
+  return app.height * 0.5f + 24;
+}
+
+// Rows curve away to the right above and below the centre line.
+f32 curve_x(const App& app, f32 y) {
+  const f32 offset = (y - center_line(app)) / app.height;
+  return app.width * 0.5f + offset * offset * 260;
 }
 
 struct Rect {
   f32 x, y, w, h;
 };
 
-// Rows curve away to the right above and below the centre.
-Rect row_rect(const App& app, i32 index, const Row& row) {
-  const f32 center = app.height * 0.5f + 24;
-  const f32 y =
-      center + (index - app.select.scroll) * kRowStride - kRowHeight / 2;
-  const f32 offset = (y + kRowHeight / 2 - center) / app.height;
-  f32       x = app.width * 0.5f + offset * offset * 260;
+Rect row_rect(const App& app, const Row& row) {
+  const f32 y = center_line(app) + row.top - app.select.scroll;
+  f32       x = curve_x(app, y + row.height / 2);
   if (row.map >= 0)
-    x += row.map == app.selected_map ? 8 : 36;
-  return {x, y, app.width - x + 40, kRowHeight};
+    x += kDifficultyIndent - (row.map == app.selected_map ? 20 : 0);
+  return {x, y, app.width - x + 40, row.height};
 }
 
 void recenter(App& app) {
-  app.select.scroll_target =
-      static_cast<f32>(row_of_map(build_rows(app), app.selected_map));
+  for (const Row& row : build_rows(app))
+    if (row.map == app.selected_map)
+      app.select.scroll_target = row.center();
+  app.select.fling = 0;
+}
+
+bool in_carousel(const App& app) {
+  return app.cursor.x >= app.width * 0.5f - 20 && app.cursor.y > 76;
 }
 
 // Every word of the query appears in one of the set's difficulties.
@@ -201,6 +226,94 @@ void draw_info_panel(App& app) {
   draw_stat_bar(app, text_x, line + 48, text_w, "HP", info.hp);
 }
 
+// Sets are dark raised cards with a dot per difficulty, coloured by
+// difficulty.
+void draw_set_row(App&              app,
+                  const Rect&       rect,
+                  const BeatmapSet& set,
+                  bool              expanded,
+                  bool              hovered) {
+  auto&     r = app.renderer;
+  const f32 lift = hovered ? 1.12f : 1.0f;
+  draw_rounded_rect(r, rect.x + 3, rect.y + 5, rect.w, rect.h, 14,
+                    fade(kBlack, 0.4f));
+  draw_rounded_rect_gradient(
+      r, rect.x, rect.y, rect.w, rect.h, 14,
+      fade(shade(hex_color(expanded ? 0x6A2C7A : 0x2E2546), lift), 0.96f),
+      fade(shade(hex_color(expanded ? 0x3C1A4E : 0x1C1830), lift), 0.96f));
+  draw_rounded_rect(r, rect.x + 10, rect.y + 12, 6, rect.h - 24, 3,
+                    fade(hex_color(0xFF66AA), expanded ? 1.0f : 0.7f));
+  const f32 dots_width = std::min<size_t>(set.maps.size(), 16) * 15.0f;
+  const f32 text_width = app.width - rect.x - dots_width - 70;
+  draw_text_shadowed(r, app.bold, fit_text(app.bold, set.title, 23, text_width),
+                     rect.x + 30, rect.y + 33, 23, kWhite);
+  draw_text(r, app.regular,
+            fit_text(app.regular, set.artist + "  //  " + set.creator, 15,
+                     text_width),
+            rect.x + 30, rect.y + 56, 15, fade(kWhite, 0.7f));
+  f32 dot_x = app.width - 28;
+  for (size_t i = std::min<size_t>(set.maps.size(), 16); i-- > 0;) {
+    const auto& info = app.library.maps[set.maps[i]];
+    draw_circle(r, dot_x, rect.y + 26, 5.5f, difficulty_colour(info));
+    dot_x -= 15;
+  }
+}
+
+// Difficulties are smaller translucent rows with a badge in their
+// difficulty's colour.
+void draw_difficulty_row(App&               app,
+                         const Rect&        rect,
+                         const BeatmapInfo& info,
+                         bool               selected,
+                         bool               hovered) {
+  auto& r = app.renderer;
+  draw_rounded_rect(r, rect.x, rect.y, rect.w, rect.h, 10,
+                    selected  ? fade(kWhite, 0.96f)
+                    : hovered ? fade(hex_color(0x2A2A48), 0.85f)
+                              : fade(hex_color(0x14142A), 0.65f));
+  const Color text = selected ? hex_color(0x1A1A2E) : kWhite;
+  const f32   badge_y = rect.y + rect.h / 2;
+  draw_circle(r, rect.x + 26, badge_y, 11, difficulty_colour(info));
+  draw_circle(r, rect.x + 26, badge_y, 11, fade(text, 0.35f), 0.82f);
+  const auto label = selected ? draw_text : draw_text_shadowed;
+  label(r, app.bold, fit_text(app.bold, info.version, 19, rect.w - 90),
+        rect.x + 48, rect.y + 24, 19, text, Align::Left);
+  char stats[96];
+  snprintf(stats, sizeof(stats), "AR %g    OD %g    CS %g    %s", info.ar,
+           info.od, info.cs, format_duration(info.end_time).c_str());
+  label(r, app.regular, stats, rect.x + 48, rect.y + 43, 13, fade(text, 0.75f),
+        Align::Left);
+}
+
+// Joins the expanded set to its difficulties: a rail down from the set's
+// accent bar with a branch to each difficulty.
+void draw_rail(App& app, const std::vector<Row>& rows) {
+  auto&      r = app.renderer;
+  const auto line = fade(kWhite, 0.3f);
+  Vec2       previous{};
+  bool       started = false;
+  for (const Row& row : rows) {
+    const Rect rect = row_rect(app, row);
+    if (row.map < 0) {
+      if (row.set == app.library.set_of_map[app.selected_map]) {
+        previous = {rect.x + 13, rect.y + rect.h - 10};
+        started = true;
+      } else if (started) {
+        return;
+      }
+      continue;
+    }
+    if (!started)
+      continue;
+    const Vec2 branch{curve_x(app, rect.y + rect.h / 2) + 13,
+                      rect.y + rect.h / 2};
+    draw_line(r, previous.x, previous.y, branch.x, branch.y, 2, line);
+    draw_line(r, branch.x, branch.y, rect.x - 6, branch.y, 2, line);
+    draw_circle(r, branch.x, branch.y, 3, line);
+    previous = branch;
+  }
+}
+
 void draw_search_box(App& app) {
   auto&       r = app.renderer;
   const auto& select = app.select;
@@ -234,20 +347,44 @@ void select_enter(App& app) {
 }
 
 void select_update(App& app) {
-  auto& select = app.select;
+  auto&      select = app.select;
+  const auto rows = build_rows(app);
+  const f32  limit = scroll_limit(rows);
+  if (select.right_down) {
+    select.scroll_target =
+        clamp01((app.cursor.y - 80) / (app.height - 160)) * limit;
+  } else if (select.left_down) {
+    const f32 moved = app.cursor.y - select.drag_start_y;
+    if (std::abs(moved) > kDragThreshold)
+      select.dragging = true;
+    if (select.dragging) {
+      // The list follows the cursor exactly, tracking its speed for the fling.
+      const f32 target =
+          std::clamp(select.drag_start_scroll - moved, 0.0f, limit);
+      if (app.dt > 0)
+        select.fling = approach(select.fling, (target - select.scroll) / app.dt,
+                                15, app.dt);
+      select.scroll = select.scroll_target = target;
+    }
+  } else if (select.fling != 0) {
+    const f32 target = select.scroll_target + select.fling * app.dt;
+    select.scroll_target = std::clamp(target, 0.0f, limit);
+    select.fling *= std::exp(-4 * app.dt);
+    if (std::abs(select.fling) < 30 || target != select.scroll_target)
+      select.fling = 0;
+  }
   select.scroll = approach(select.scroll, select.scroll_target, 12, app.dt);
   // Keep the preview looping from its start point.
   if (music_at_end(app.audio))
     play_preview(app);
 
-  const auto rows = build_rows(app);
-  i32        hovered = -1;
+  i32 hovered = -1;
   for (i32 i = 0; i < static_cast<i32>(rows.size()); ++i) {
-    const Rect rect = row_rect(app, i, rows[i]);
+    const Rect rect = row_rect(app, rows[i]);
     if (contains(app.cursor, rect.x, rect.y, rect.w, rect.h))
       hovered = i;
   }
-  if (hovered != select.hovered_row && hovered >= 0)
+  if (hovered != select.hovered_row && hovered >= 0 && !select.dragging)
     play_sound(app.audio, Sound::MenuHover, 0.3f);
   select.hovered_row = hovered;
 }
@@ -269,53 +406,38 @@ void select_draw(App& app) {
   }
 
   const auto rows = build_rows(app);
+  draw_rail(app, rows);
   for (i32 i = 0; i < static_cast<i32>(rows.size()); ++i) {
     const Row& row = rows[i];
-    const Rect rect = row_rect(app, i, row);
+    const Rect rect = row_rect(app, row);
     if (rect.y > app.height || rect.y + rect.h < 0)
       continue;
     const bool hovered = i == select.hovered_row;
-    if (row.map < 0) {
-      const auto& set = app.library.sets[row.set];
-      draw_rounded_rect(r, rect.x, rect.y, rect.w, rect.h, 12,
-                        fade(hex_color(0x1A1A2E), hovered ? 0.95f : 0.82f));
-      draw_rounded_rect(r, rect.x + 10, rect.y + 12, 5, rect.h - 24, 2.5f,
-                        hex_color(0xFF66AA));
-      draw_text(r, app.bold, fit_text(app.bold, set.title, 22, rect.w - 80),
-                rect.x + 28, rect.y + 30, 22, kWhite);
-      draw_text(r, app.regular,
-                fit_text(app.regular, set.artist + "  //  " + set.creator, 15,
-                         rect.w - 80),
-                rect.x + 28, rect.y + 52, 15, fade(kWhite, 0.7f));
-      continue;
-    }
-    const auto& info = app.library.maps[row.map];
-    const bool  selected = row.map == app.selected_map;
-    draw_rounded_rect(r, rect.x, rect.y, rect.w, rect.h, 12,
-                      selected
-                          ? fade(kWhite, 0.95f)
-                          : fade(hex_color(0x262640), hovered ? 0.95f : 0.85f));
-    draw_rounded_rect(r, rect.x + 10, rect.y + 12, 6, rect.h - 24, 3,
-                      difficulty_colour(info));
-    const Color text = selected ? hex_color(0x1A1A2E) : kWhite;
-    draw_text(r, app.bold, fit_text(app.bold, info.version, 21, rect.w - 80),
-              rect.x + 30, rect.y + 29, 21, text);
-    char stats[96];
-    snprintf(stats, sizeof(stats), "AR %g    OD %g    CS %g    %s", info.ar,
-             info.od, info.cs, format_duration(info.end_time).c_str());
-    draw_text(r, app.regular, stats, rect.x + 30, rect.y + 51, 14,
-              fade(text, 0.75f));
+    if (row.map < 0)
+      draw_set_row(app, rect, app.library.sets[row.set],
+                   row.set == app.library.set_of_map[app.selected_map],
+                   hovered);
+    else
+      draw_difficulty_row(app, rect, app.library.maps[row.map],
+                          row.map == app.selected_map, hovered);
   }
 
+  // Rows fade out under the search box rather than showing through it.
+  draw_rect_gradient(r, 0, 0, app.width, 96, fade(kBlack, 0.75f),
+                     fade(kBlack, 0));
   draw_info_panel(app);
   draw_search_box(app);
   draw_rect_gradient(r, 0, app.height - 64, app.width, 64, fade(kBlack, 0),
                      fade(kBlack, 0.7f));
-  draw_text(r, app.regular,
-            "Enter  play        Esc  back        F2  random        Arrows  "
-            "choose        Type  search",
-            app.width / 2, app.height - 22, 14, fade(kWhite, 0.75f),
-            Align::Center);
+  draw_text(
+      r, app.regular,
+      fit_text(
+          app.regular,
+          "Enter  play      Esc  back      Left / Right  set      "
+          "Up / Down  difficulty      Drag, or right-click empty space  scroll"
+          "      F2  random      Type  search",
+          14, app.width - 40),
+      app.width / 2, app.height - 22, 14, fade(kWhite, 0.75f), Align::Center);
 }
 
 void select_key(App& app, i32 key, i32 action) {
@@ -374,11 +496,33 @@ void select_char(App& app, u32 codepoint) {
 }
 
 void select_click(App& app, i32 button, i32 action) {
-  if (button != GLFW_MOUSE_BUTTON_LEFT || action != GLFW_PRESS)
+  auto& select = app.select;
+  // Holding the right button on empty space jumps through the list, as in
+  // osu!, which keeps right-clicks on a row for its beatmap options.
+  if (button == GLFW_MOUSE_BUTTON_RIGHT) {
+    select.right_down = action == GLFW_PRESS && select.hovered_row < 0;
+    select.fling = 0;
     return;
+  }
+  if (button != GLFW_MOUSE_BUTTON_LEFT)
+    return;
+  if (action == GLFW_PRESS) {
+    if (!in_carousel(app))
+      return;
+    select.left_down = true;
+    select.dragging = false;
+    select.drag_start_y = app.cursor.y;
+    select.drag_start_scroll = select.scroll;
+    select.fling = 0;
+    return;
+  }
+  // A press that didn't become a drag is a click.
+  const bool clicked = select.left_down && !select.dragging;
+  select.left_down = false;
+  select.dragging = false;
   const auto rows = build_rows(app);
-  const i32  hovered = app.select.hovered_row;
-  if (hovered < 0 || hovered >= static_cast<i32>(rows.size()))
+  const i32  hovered = select.hovered_row;
+  if (!clicked || hovered < 0 || hovered >= static_cast<i32>(rows.size()))
     return;
   const Row& row = rows[hovered];
   if (row.map < 0)
@@ -390,10 +534,11 @@ void select_click(App& app, i32 button, i32 action) {
 }
 
 void select_scroll(App& app, f64 dy) {
-  const auto rows = build_rows(app);
-  app.select.scroll_target =
-      std::clamp(app.select.scroll_target - static_cast<f32>(dy) * 1.5f, 0.0f,
-                 static_cast<f32>(std::max<size_t>(rows.size(), 1) - 1));
+  auto& select = app.select;
+  select.fling = 0;
+  select.scroll_target =
+      std::clamp(select.scroll_target - static_cast<f32>(dy) * kWheelStep, 0.0f,
+                 scroll_limit(build_rows(app)));
 }
 
 }  // namespace circles
