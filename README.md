@@ -6,17 +6,17 @@ beatmaps, parsed with
 
 ## Build and run
 
-macOS only: rendering uses Apple's OpenGL 4.1 headers. Needs CMake and GLFW
-(`brew install cmake glfw`).
+macOS only: rendering uses Apple's OpenGL 4.1 headers. Needs CMake, GLFW and
+xz, for replays' LZMA compression (`brew install cmake glfw xz`).
 
 ```sh
 make run     # build into build/ and start the game
-make test    # rule and archive tests
+make test    # rule, archive, skin and replay tests
 make format  # clang-format the sources
 ```
 
-The game reads `shaders/` and `beatmaps/` from the working directory, so run
-it from this folder.
+The game reads `shaders/`, `beatmaps/`, `skins/` and `replays/` from the
+working directory, so run it from this folder.
 
 ## Beatmaps
 
@@ -30,6 +30,16 @@ Put osu! skins (`.osk` files or skin folders) in `skins/`. A newly added
 skin becomes active; F9 cycles through the skins and the built-in look. Skins
 cover gameplay: hit objects, cursor, judgements, score digits, health bar,
 grades and hitsounds. Elements a skin leaves out keep the built-in look.
+
+## Replays
+
+Every finished play is saved to `replays/` as an osu!-compatible `.osr`, so
+osu! can open it too. The results screen's Watch button (or W) plays it back;
+song select lists the selected difficulty's replays, best first, and clicking
+one plays it back. Replays from osu! dropped into `replays/` are listed once
+their beatmap is in `beatmaps/`: a replay names its beatmap by the MD5 hash of
+the `.osu` file, so it needs that exact version. Space skips a replay's intro
+and Esc pauses it.
 
 ## Controls
 
@@ -53,6 +63,7 @@ and F2 for a random song.
 - Without a skin, hitsounds are synthesized. Beatmaps' own hitsound samples,
   storyboards and videos are ignored.
 - Skins don't restyle the menus, song select, pause screen or input overlay.
-- No mods.
+- No mods. Replays play back without their mods: a Double Time replay plays at
+  normal speed, Hidden objects stay visible.
 - Scoring follows osu!stable's score formula; health is a simplified version
   of osu!'s.

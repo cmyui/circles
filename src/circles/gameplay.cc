@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
+#include <ctime>
 #include <fosu/slider_event.h>
 #include <fosu/slider_path.h>
 #include <span>
@@ -26,6 +28,8 @@ constexpr f64 kClockCorrectionRate = 2;
 constexpr f64 kResyncThreshold = 50;
 constexpr f32 kFailDuration = 2;   // seconds the music takes to wind down
 constexpr f64 kFinishDelay = 1.5;  // seconds before showing results
+// ms between recorded frames while the keys rest; key changes add their own.
+constexpr f64 kRecordInterval = 8;
 
 // Health changes, as fractions of the bar.
 constexpr f64 kHealthHit300 = 0.06;
@@ -307,7 +311,9 @@ void score_slider_part(App& app, size_t index, const fosu::SliderEvent& event) {
   auto&       state = game.states[index];
   ++state.parts_total;
   if (!state.tracking) {
-    break_combo(app);
+    // As in osu!, missing a slider's end costs accuracy and health, not combo.
+    if (event.type != fosu::SliderEventType::LegacyLastTick)
+      break_combo(app);
     change_health(game, -kHealthSliderPart);
     return;
   }
@@ -335,7 +341,7 @@ void score_slider_part(App& app, size_t index, const fosu::SliderEvent& event) {
 
 void update_sliders(App& app) {
   auto&      game = app.game;
-  const Vec2 cursor = playfield(app).to_playfield(app.cursor);
+  const Vec2 cursor = playfield(app).to_playfield(game.cursor);
   const bool holding = any_held(game);
   for (size_t i = game.first_active;
        i < game.objects.size() && game.objects[i].time <= game.time; ++i) {
@@ -383,7 +389,7 @@ void update_sliders(App& app) {
 
 void update_spinners(App& app, f64 elapsed) {
   auto&      game = app.game;
-  const Vec2 cursor = playfield(app).to_playfield(app.cursor);
+  const Vec2 cursor = playfield(app).to_playfield(game.cursor);
   const bool holding = any_held(game);
   for (size_t i = game.first_active;
        i < game.objects.size() && game.objects[i].time <= game.time; ++i) {
@@ -475,8 +481,39 @@ void skip_intro(App& app) {
   play_sound(app.audio, Sound::MenuClick, 0.6f);
 }
 
-void set_hit_key(App& app, i32 key, bool down, f64 wall) {
-  auto& game = app.game;
+// ---- Replays ----
+
+// Each hit key's bits in a replay frame. osu! marks a keyboard key with a
+// mouse button's bit too.
+constexpr u32 kReplayBits[kHitKeyCount] = {kReplayKey1 | kReplayMouse1,
+                                           kReplayKey2 | kReplayMouse2,
+                                           kReplayMouse1, kReplayMouse2};
+
+u32 replay_keys(const Gameplay& game) {
+  u32 keys = 0;
+  for (i32 key = 0; key < kHitKeyCount; ++key)
+    if (game.held[key])
+      keys |= kReplayBits[key];
+  return keys;
+}
+
+bool replay_holds(u32 keys, i32 key) {
+  switch (key) {
+    case kKey1:
+      return keys & kReplayKey1;
+    case kKey2:
+      return keys & kReplayKey2;
+    // A mouse button's bit alongside its keyboard key's is that key.
+    case kMouse1:
+      return (keys & kReplayMouse1) && !(keys & kReplayKey1);
+    default:
+      return (keys & kReplayMouse2) && !(keys & kReplayKey2);
+  }
+}
+
+// Holds or releases a hit key. A press while playing is judged at `time`
+// where `cursor` (window points) was.
+void change_key(Gameplay& game, i32 key, bool down, f64 time, Vec2 cursor) {
   if (game.held[key] == down)
     return;
   game.held[key] = down;
@@ -484,8 +521,52 @@ void set_hit_key(App& app, i32 key, bool down, f64 wall) {
     return;
   ++game.press_counts[key];
   if (game.phase == GamePhase::Playing)
-    game.pending.push_back(
-        {audio_time_at(game, wall) - app.audio_offset, app.cursor});
+    game.pending.push_back({time, cursor});
+}
+
+void record_frame(App& app, f64 time) {
+  auto& game = app.game;
+  // The clock's corrections can step back slightly; frames stay in order.
+  if (!game.frames.empty())
+    time = std::max(time, game.frames.back().time);
+  game.frames.push_back(
+      {time, playfield(app).to_playfield(app.cursor), replay_keys(game)});
+}
+
+// Applies the replay's input up to the current time: its key changes as
+// presses and releases, then its cursor, interpolated between frames.
+void play_replay(App& app) {
+  auto&           game = app.game;
+  const auto&     frames = game.frames;
+  const Playfield field = playfield(app);
+  while (game.next_frame < frames.size() &&
+         frames[game.next_frame].time <= game.time) {
+    const ReplayFrame& frame = frames[game.next_frame++];
+    for (i32 key = 0; key < kHitKeyCount; ++key)
+      change_key(game, key, replay_holds(frame.keys, key), frame.time,
+                 field.to_screen(frame.position));
+  }
+  if (frames.empty())
+    return;
+  const size_t next = std::min(game.next_frame, frames.size() - 1);
+  const auto&  from = frames[game.next_frame > 0 ? game.next_frame - 1 : 0];
+  const auto&  to = frames[next];
+  const f64    span = to.time - from.time;
+  const f32    t =
+      span > 0 ? clamp01(static_cast<f32>((game.time - from.time) / span)) : 1;
+  game.cursor = field.to_screen(lerp(from.position, to.position, t));
+  game.replay_trail.push_back({app.now, game.cursor});
+}
+
+void set_hit_key(App& app, i32 key, bool down, f64 wall) {
+  auto& game = app.game;
+  if (game.held[key] == down)
+    return;
+  // Whole ms, as replays store them, so watching judges presses identically.
+  const f64 time = std::round(audio_time_at(game, wall) - app.audio_offset);
+  change_key(game, key, down, time, app.cursor);
+  if (game.phase == GamePhase::Playing)
+    record_frame(app, time);
 }
 
 void quit_to_song_select(App& app) {
@@ -533,13 +614,31 @@ void activate_menu_item(App& app, i32 index) {
   if (item == "Continue")
     resume(app);
   else if (item == "Retry")
-    gameplay_start(app, app.game.map_index);
+    gameplay_start(app, app.game.map_index, app.game.replay_path);
   else
     quit_to_song_select(app);
 }
 
 void finish(App& app) {
-  const auto& game = app.game;
+  auto&       game = app.game;
+  std::string player = game.replay_player;
+  std::string replay_path = game.replay_path;
+  if (!game.watching) {
+    const char* user = std::getenv("USER");
+    player = user ? user : "player";
+    replay_path = save_replay(
+        app, game.map_index,
+        {.beatmap_md5 = app.library.maps[game.map_index].md5,
+         .player = player,
+         .counts = game.counts,
+         .score = game.score,
+         .max_combo = game.max_combo,
+         .perfect = game.counts.miss == 0 && game.combo == game.max_combo,
+         .timestamp = std::time(nullptr),
+         .frames = std::move(game.frames)});
+    if (replay_path.empty())
+      show_toast(app, "Couldn't save the replay");
+  }
   app.results = Results{
       .map_index = game.map_index,
       .score = game.score,
@@ -547,6 +646,8 @@ void finish(App& app) {
       .counts = game.counts,
       .offsets = game.offsets,
       .hit50_window = game.windows.hit50,
+      .player = std::move(player),
+      .replay_path = std::move(replay_path),
   };
   switch_screen(app, Screen::Results);
 }
@@ -1319,6 +1420,11 @@ void draw_game_overlays(App& app) {
     }
   }
 
+  if (game.watching)
+    draw_text_shadowed(r, app.bold, "Watching " + game.replay_player,
+                       app.width / 2, 92, 20, fade(kWhite, 0.8f),
+                       Align::Center);
+
   if (game.phase == GamePhase::Playing)
     return;
   const bool failed = game.phase == GamePhase::Failed;
@@ -1374,13 +1480,22 @@ SliderRenderer create_slider_renderer() {
   return s;
 }
 
-bool gameplay_start(App& app, i32 map_index) {
+bool gameplay_start(App& app, i32 map_index, std::string replay_path) {
   if (map_index < 0)
     return false;
   const auto& info = app.library.maps[map_index];
   auto&       game = app.game;
   game = Gameplay{};
   game.map_index = map_index;
+  if (!replay_path.empty()) {
+    auto replay = read_replay(replay_path);
+    if (!replay)
+      return false;
+    game.watching = true;
+    game.replay_path = std::move(replay_path);
+    game.replay_player = std::move(replay->player);
+    game.frames = std::move(replay->frames);
+  }
   game.parser = std::make_unique<fosu::Parser>();
   game.map = game.parser->parse_file(info.osu_path.c_str(),
                                      {.calculate_slider_paths = true,
@@ -1535,6 +1650,14 @@ void gameplay_update(App& app) {
   const f64 previous = game.time;
   game.time = audio_time - app.audio_offset;
   const f64 elapsed = std::max(0.0, game.time - previous);
+  if (game.watching) {
+    play_replay(app);
+  } else {
+    game.cursor = app.cursor;
+    if (game.frames.empty() ||
+        game.time - game.frames.back().time >= kRecordInterval)
+      record_frame(app, game.time);
+  }
 
   for (const auto& press : game.pending)
     handle_press(app, press);
@@ -1551,7 +1674,11 @@ void gameplay_update(App& app) {
   if (!in_break(game) && game.time >= game.objects.front().time &&
       game.time <= game.end_time)
     change_health(game, -drain_per_second(game.hp) * elapsed / 1000);
-  if (game.health <= 0 && !game.finished) {
+  // A replay fails where its input ends early, as when its player failed or
+  // quit, not by health, which may have run differently.
+  const bool replay_over = game.watching && !game.frames.empty() &&
+                           game.time > game.frames.back().time + 1000;
+  if (!game.finished && (game.watching ? replay_over : game.health <= 0)) {
     fail(app);
     return;
   }
@@ -1572,7 +1699,9 @@ void gameplay_update(App& app) {
     game.finished = true;
     game.finished_at = app.now;
   }
-  if (game.finished && app.now - game.finished_at > kFinishDelay)
+  // Only once, though the screen keeps updating while it fades out.
+  if (game.finished && app.now - game.finished_at > kFinishDelay &&
+      app.transition_started < 0)
     finish(app);
 }
 
@@ -1618,7 +1747,7 @@ void gameplay_draw(App& app) {
 void gameplay_key(App& app, i32 key, i32 action, f64 wall) {
   auto& game = app.game;
   if (key == GLFW_KEY_Z || key == GLFW_KEY_X) {
-    if (action != GLFW_REPEAT)
+    if (action != GLFW_REPEAT && !game.watching)
       set_hit_key(app, key == GLFW_KEY_Z ? kKey1 : kKey2, action == GLFW_PRESS,
                   wall);
     return;
@@ -1651,7 +1780,7 @@ void gameplay_key(App& app, i32 key, i32 action, f64 wall) {
       skip_intro(app);
       break;
     case GLFW_KEY_GRAVE_ACCENT:  // quick retry
-      gameplay_start(app, game.map_index);
+      gameplay_start(app, game.map_index, game.replay_path);
       break;
   }
 }
@@ -1662,8 +1791,9 @@ void gameplay_click(App& app, i32 button, i32 action, f64 wall) {
       button == GLFW_MOUSE_BUTTON_LEFT || button == GLFW_MOUSE_BUTTON_RIGHT;
   // Releases always count, so a button held through a pause, or while mouse
   // buttons are switched off, isn't stuck down.
-  if (hit_button && (action == GLFW_RELEASE ||
-                     (game.phase == GamePhase::Playing && app.mouse_buttons)))
+  if (hit_button && !game.watching &&
+      (action == GLFW_RELEASE ||
+       (game.phase == GamePhase::Playing && app.mouse_buttons)))
     set_hit_key(app, button == GLFW_MOUSE_BUTTON_LEFT ? kMouse1 : kMouse2,
                 action == GLFW_PRESS, wall);
   if (game.phase != GamePhase::Playing && button == GLFW_MOUSE_BUTTON_LEFT &&

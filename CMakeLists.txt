@@ -17,6 +17,8 @@ endif()
 
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(GLFW REQUIRED IMPORTED_TARGET glfw3)
+# Replays (.osr) are LZMA-compressed.
+pkg_check_modules(LZMA REQUIRED IMPORTED_TARGET liblzma)
 
 # Single-header libraries (miniaudio, stb), compiled once as C. Their headers
 # are system includes so our warnings don't apply to them.
@@ -34,7 +36,9 @@ add_library(circles_core STATIC
   src/circles/gameplay.cc
   src/circles/gfx.cc
   src/circles/library.cc
+  src/circles/md5.cc
   src/circles/menu.cc
+  src/circles/replay.cc
   src/circles/results.cc
   src/circles/skin.cc
   src/circles/song_select.cc
@@ -43,14 +47,14 @@ target_include_directories(circles_core PUBLIC src)
 target_compile_definitions(circles_core PUBLIC GL_SILENCE_DEPRECATION)
 target_compile_options(circles_core PRIVATE -Wall -Wextra)
 target_link_libraries(circles_core PUBLIC
-  circles_third_party PkgConfig::GLFW "-framework OpenGL")
+  circles_third_party PkgConfig::GLFW PkgConfig::LZMA "-framework OpenGL")
 
 add_executable(circles src/circles/main.cc)
 target_compile_options(circles PRIVATE -Wall -Wextra)
 target_link_libraries(circles PRIVATE circles_core)
 
 if(BUILD_TESTING)
-  set(_tests rules archive skin hitsounds)
+  set(_tests rules archive skin hitsounds md5 replay)
   set(_test_targets)
   foreach(name IN LISTS _tests)
     list(APPEND _test_targets test_${name})

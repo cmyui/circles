@@ -6,3 +6,5 @@ beatmaps/*
 skins/*
 !skins/.gitkeep
 settings.txt
+replays/*
+!replays/.gitkeep

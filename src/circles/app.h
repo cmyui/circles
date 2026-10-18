@@ -5,6 +5,7 @@
 #include <circles/hitsounds.h>
 #include <circles/library.h>
 #include <circles/math.h>
+#include <circles/replay.h>
 #include <circles/rules.h>
 #include <circles/skin.h>
 #include <circles/types.h>
@@ -96,6 +97,11 @@ struct HitError {
 
 enum class GamePhase : u8 { Playing, Paused, Failed };
 
+struct TrailPoint {
+  f64  time;
+  Vec2 position;
+};
+
 // Two keyboard keys, then two mouse buttons (a tablet pen taps as button 1).
 enum HitKey : u8 { kKey1, kKey2, kMouse1, kMouse2, kHitKeyCount };
 
@@ -132,23 +138,34 @@ struct Gameplay {
   Counts counts;
   f64    health = 1;
   f32    displayed_health = 1;
-  std::vector<f64>      offsets;
-  std::vector<HitError> recent_errors;
-  std::vector<Popup>    popups;
-  f64                   combo_changed = -1e9;  // wall seconds
-  size_t                judged = 0;
-  size_t                first_active = 0;
+  std::vector<f64>         offsets;
+  std::vector<HitError>    recent_errors;
+  std::vector<Popup>       popups;
+  f64                      combo_changed = -1e9;  // wall seconds
+  size_t                   judged = 0;
+  size_t                   first_active = 0;
 
-  bool                  held[kHitKeyCount] = {};
-  i32                   press_counts[kHitKeyCount] = {};
-  std::vector<Press>    pending;
+  bool                     held[kHitKeyCount] = {};
+  i32                      press_counts[kHitKeyCount] = {};
+  std::vector<Press>       pending;
 
-  GamePhase             phase = GamePhase::Playing;
-  f64                   phase_changed = 0;  // wall seconds
-  i32                   menu_selection = -1;
-  f32                   dim = 0.8f;
-  bool                  finished = false;
-  f64                   finished_at = 0;
+  // Every play records its input as replay frames. Watching a replay plays
+  // its frames back instead of taking input.
+  std::vector<ReplayFrame> frames;
+  bool                     watching = false;
+  std::string              replay_path;  // the replay being watched
+  std::string              replay_player;
+  size_t                   next_frame = 0;  // watching: the next to apply
+  // The cursor that hits, in window points: the mouse's, or the replay's.
+  Vec2                     cursor{};
+  std::deque<TrailPoint>   replay_trail;
+
+  GamePhase                phase = GamePhase::Playing;
+  f64                      phase_changed = 0;  // wall seconds
+  i32                      menu_selection = -1;
+  f32                      dim = 0.8f;
+  bool                     finished = false;
+  f64                      finished_at = 0;
 };
 
 struct Results {
@@ -158,6 +175,8 @@ struct Results {
   Counts           counts;
   std::vector<f64> offsets;
   f64              hit50_window = 0;
+  std::string      player;
+  std::string      replay_path;  // empty if the replay wasn't saved
   f64              entered = 0;
   i32              hovered = -1;
 };
@@ -197,7 +216,8 @@ struct SongSelect {
   bool             right_down = false;
   f32              drag_start_y = 0;
   f32              drag_start_scroll = 0;
-  f32              fling = 0;  // points per second
+  f32              fling = 0;            // points per second
+  i32              hovered_replay = -1;  // into the selected map's replays
 };
 
 // Draws slider bodies; see slider.frag.
@@ -224,11 +244,6 @@ struct Backdrop {
   f64                changed = -1e9;  // wall seconds
 };
 
-struct TrailPoint {
-  f64  time;
-  Vec2 position;
-};
-
 // Not movable: Audio must stay put.
 struct App {
   GLFWwindow*              window = nullptr;
@@ -252,33 +267,36 @@ struct App {
 
   Screen                   screen = Screen::MainMenu;
   Screen                   next_screen = Screen::MainMenu;
-  f64        transition_started = -1;  // wall seconds; negative when none runs
+  f64 transition_started = -1;  // wall seconds; negative when none runs
 
   // Shared by the menu music, song select and gameplay.
-  i32        selected_map = -1;
+  i32 selected_map = -1;
   // ms; positive when sound reaches the player late.
-  f64        audio_offset = 0;
+  f64 audio_offset = 0;
+  // Replays in replays/, and the one gameplay should play back next.
+  std::vector<ReplayEntry> replays;
+  std::string              replay_to_watch;
   // Whether mouse buttons hit in gameplay. Tablet players who tap keys turn
   // them off so pen taps don't count.
-  bool       mouse_buttons = true;
+  bool                     mouse_buttons = true;
 
-  MainMenu   menu;
-  SongSelect select;
-  Gameplay   game;
-  Results    results;
+  MainMenu                 menu;
+  SongSelect               select;
+  Gameplay                 game;
+  Results                  results;
 
-  Vec2       cursor{};
-  std::deque<TrailPoint> trail;
-  std::vector<Vec2>      scratch;  // a slider body's points this frame
-  bool                   fullscreen = false;
-  i32                    windowed[4] = {};  // x, y, width, height to restore
+  Vec2                     cursor{};
+  std::deque<TrailPoint>   trail;
+  std::vector<Vec2>        scratch;  // a slider body's points this frame
+  bool                     fullscreen = false;
+  i32                      windowed[4] = {};  // x, y, width, height to restore
 
-  i32                    fps = 0;
-  i32                    fps_frames = 0;
-  f64                    fps_window_start = 0;
-  std::string            toast;
-  f64                    toast_time = -1e9;
-  bool                   quit = false;
+  i32                      fps = 0;
+  i32                      fps_frames = 0;
+  f64                      fps_window_start = 0;
+  std::string              toast;
+  f64                      toast_time = -1e9;
+  bool                     quit = false;
 };
 
 // app.cc
@@ -311,6 +329,11 @@ inline f32 ui_scale(const App& app) {
   return app.height / 768;
 }
 void save_settings(const App& app);
+// Writes `replay` of `map` to replays/ and lists it. Returns its path, or
+// nothing if it couldn't be written.
+std::string save_replay(App& app, i32 map, Replay replay);
+// The replays of `map`, best score first.
+std::vector<const ReplayEntry*> map_replays(const App& app, i32 map);
 
 bool contains(Vec2 point, f32 x, f32 y, f32 w, f32 h);
 // `hover` (0 to 1) animates the highlight.
@@ -350,7 +373,8 @@ void select_scroll(App& app, f64 dy);
 
 // gameplay.cc
 SliderRenderer create_slider_renderer();
-bool gameplay_start(App& app, i32 map);
+// Plays the map, or watches the replay at `replay_path` on it.
+bool gameplay_start(App& app, i32 map, std::string replay_path = {});
 void gameplay_update(App& app);
 void gameplay_draw(App& app);
 // `wall` is when the input arrived, for timing the hit.

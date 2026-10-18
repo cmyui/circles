@@ -6,8 +6,10 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <ctime>
 #include <filesystem>
 #include <fstream>
+#include <utility>
 
 namespace circles {
 
@@ -21,6 +23,7 @@ constexpr i32         kFaceHeavy = 8;
 
 constexpr const char* kBeatmapDirectory = "beatmaps";
 constexpr const char* kSkinDirectory = "skins";
+constexpr const char* kReplayDirectory = "replays";
 constexpr const char* kSettingsPath = "settings.txt";
 
 constexpr f64 kTransitionHalf = 0.18;  // seconds to fade out, then back in
@@ -64,6 +67,15 @@ i32 skin_index_of(const App& app, std::string_view name) {
   const auto found = std::find(app.skins.begin(), app.skins.end(), name);
   return found == app.skins.end() ? -1
                                   : static_cast<i32>(found - app.skins.begin());
+}
+
+// Characters some file systems reject become underscores.
+std::string file_name_safe(std::string text) {
+  for (char& c : text)
+    if (std::string_view("/\\:*?\"<>|").find(c) != std::string_view::npos ||
+        static_cast<unsigned char>(c) < ' ')
+      c = '_';
+  return text;
 }
 
 // Imports any new .osk files and lists the skins again. Returns the name of
@@ -112,7 +124,8 @@ void enter_screen(App& app, Screen screen) {
       select_enter(app);
       break;
     case Screen::Gameplay:
-      if (!gameplay_start(app, app.selected_map)) {
+      if (!gameplay_start(app, app.selected_map,
+                          std::exchange(app.replay_to_watch, {}))) {
         show_toast(app, "Couldn't load that beatmap");
         app.screen = Screen::SongSelect;
         select_enter(app);
@@ -183,20 +196,24 @@ void toggle_fullscreen(App& app) {
   app.fullscreen = !app.fullscreen;
 }
 
-void draw_skin_cursor(App& app, const SkinImage& cursor, bool pressed) {
+void draw_skin_cursor(App&                          app,
+                      const SkinImage&              cursor,
+                      Vec2                          position,
+                      const std::deque<TrailPoint>& trail,
+                      bool                          pressed) {
   auto&       r = app.renderer;
   const auto& config = app.skin.config;
   const f32   scale = ui_scale(app);
-  if (const auto* trail = skin_element(app.skin, "cursortrail")) {
-    for (const auto& point : app.trail) {
+  if (const auto* trail_image = skin_element(app.skin, "cursortrail")) {
+    for (const auto& point : trail) {
       const f32 age = static_cast<f32>((app.now - point.time) / kTrailLength);
-      draw_skin_image(r, trail->front(), point.position.x, point.position.y,
-                      scale, fade(kWhite, 0.6f * (1 - age)));
+      draw_skin_image(r, trail_image->front(), point.position.x,
+                      point.position.y, scale, fade(kWhite, 0.6f * (1 - age)));
     }
   }
   const f32 cursor_scale = scale * (pressed && config.cursor_expand ? 1.3f : 1);
   // Cursors not marked as centred hang from their top-left corner.
-  Vec2      at = app.cursor;
+  Vec2      at = position;
   if (!config.cursor_centre)
     at = at + Vec2{cursor.width(), cursor.height()} * (cursor_scale / 2);
   const f32 angle =
@@ -213,21 +230,25 @@ void draw_cursor(App& app) {
   if (app.screen == Screen::Gameplay)
     for (bool held : game.held)
       pressed |= held;
+  // A replay being watched shows its cursor, until a pause needs the mouse.
+  const bool  replay = app.screen == Screen::Gameplay && game.watching &&
+                       game.phase == GamePhase::Playing;
+  const Vec2  position = replay ? game.cursor : app.cursor;
+  const auto& trail = replay ? game.replay_trail : app.trail;
   if (const auto* cursor = skin_element(app.skin, "cursor")) {
-    draw_skin_cursor(app, cursor->front(), pressed);
+    draw_skin_cursor(app, cursor->front(), position, trail, pressed);
     return;
   }
   const f32   size = app.height * 0.022f * (pressed ? 1.2f : 1);
   const Color warm = hex_color(0xFFC860);
-  for (const auto& point : app.trail) {
+  for (const auto& point : trail) {
     const f32 age = static_cast<f32>((app.now - point.time) / kTrailLength);
     draw_circle(r, point.position.x, point.position.y,
                 size * 0.55f * (1 - age * 0.5f), fade(warm, 0.25f * (1 - age)));
   }
-  draw_circle(r, app.cursor.x, app.cursor.y, size * 1.7f, fade(warm, 0.25f), 0,
-              1);
-  draw_circle(r, app.cursor.x, app.cursor.y, size, fade(kWhite, 0.95f), 0.72f);
-  draw_circle(r, app.cursor.x, app.cursor.y, size * 0.3f, warm);
+  draw_circle(r, position.x, position.y, size * 1.7f, fade(warm, 0.25f), 0, 1);
+  draw_circle(r, position.x, position.y, size, fade(kWhite, 0.95f), 0.72f);
+  draw_circle(r, position.x, position.y, size * 0.3f, warm);
 }
 
 void draw_overlays(App& app) {
@@ -304,8 +325,9 @@ bool app_init(App& app) {
   use_skin(app,
            skin_index_of(app, new_skin.empty() ? settings.skin : new_skin));
   app.library = scan_library(kBeatmapDirectory);
-  printf("%zu beatmaps in %zu sets\n", app.library.maps.size(),
-         app.library.sets.size());
+  app.replays = scan_replays(kReplayDirectory);
+  printf("%zu beatmaps in %zu sets, %zu replays\n", app.library.maps.size(),
+         app.library.sets.size(), app.replays.size());
 
   app.now = glfwGetTime();
   app.fps_window_start = app.now;
@@ -340,8 +362,9 @@ void app_frame(App& app, f64 now) {
     app.fps_window_start = now;
   }
   update_backdrop(app);
-  while (!app.trail.empty() && now - app.trail.front().time > kTrailLength)
-    app.trail.pop_front();
+  for (auto* trail : {&app.trail, &app.game.replay_trail})
+    while (!trail->empty() && now - trail->front().time > kTrailLength)
+      trail->pop_front();
 
   if (app.transition_started >= 0) {
     const f64 t = now - app.transition_started;
@@ -554,6 +577,38 @@ void save_settings(const App& app) {
   file << "skin=" << (app.skin_index >= 0 ? app.skins[app.skin_index] : "")
        << '\n';
   file << "mouse_buttons=" << app.mouse_buttons << '\n';
+}
+
+std::string save_replay(App& app, i32 map, Replay replay) {
+  const auto& info = app.library.maps[map];
+  char        date[32];
+  const auto  timestamp = static_cast<std::time_t>(replay.timestamp);
+  std::strftime(date, sizeof(date), "%Y-%m-%d %H-%M-%S",
+                std::localtime(&timestamp));
+  // Named as osu! names exported replays.
+  const auto path =
+      std::filesystem::path(kReplayDirectory) /
+      file_name_safe(replay.player + " - " + info.artist + " - " + info.title +
+                     " [" + info.version + "] (" + date + ").osr");
+  if (!write_replay(path, replay))
+    return {};
+  replay.frames.clear();
+  app.replays.push_back({path, std::move(replay)});
+  return path.string();
+}
+
+std::vector<const ReplayEntry*> map_replays(const App& app, i32 map) {
+  std::vector<const ReplayEntry*> replays;
+  if (map < 0)
+    return replays;
+  for (const auto& entry : app.replays)
+    if (entry.replay.beatmap_md5 == app.library.maps[map].md5)
+      replays.push_back(&entry);
+  std::stable_sort(replays.begin(), replays.end(),
+                   [](const ReplayEntry* a, const ReplayEntry* b) {
+                     return a->replay.score > b->replay.score;
+                   });
+  return replays;
 }
 
 void change_audio_offset(App& app, f64 ms) {

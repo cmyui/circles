@@ -13,15 +13,17 @@ struct Button {
   f32 x, y, w, h;
 };
 
-// Retry, then back.
+enum ButtonIndex : i32 { kRetry, kWatch, kBack, kButtonCount };
+
 Button button(const App& app, i32 index) {
-  constexpr f32 kWidth = 200, kHeight = 56, kGap = 16;
-  return {app.width - 2 * kWidth - kGap - 40 + index * (kWidth + kGap),
-          app.height - kHeight - 40, kWidth, kHeight};
+  constexpr f32 kWidth = 180, kHeight = 56, kGap = 16;
+  return {
+      app.width - kButtonCount * (kWidth + kGap) - 24 + index * (kWidth + kGap),
+      app.height - kHeight - 40, kWidth, kHeight};
 }
 
 i32 button_at(const App& app, Vec2 point) {
-  for (i32 i = 0; i < 2; ++i) {
+  for (i32 i = 0; i < kButtonCount; ++i) {
     const Button b = button(app, i);
     if (contains(point, b.x, b.y, b.w, b.h))
       return i;
@@ -30,10 +32,12 @@ i32 button_at(const App& app, Vec2 point) {
 }
 
 void activate(App& app, i32 index) {
-  if (index < 0)
+  if (index < 0 || (index == kWatch && app.results.replay_path.empty()))
     return;
   play_sound(app.audio, Sound::MenuClick, 0.7f);
-  switch_screen(app, index == 0 ? Screen::Gameplay : Screen::SongSelect);
+  if (index == kWatch)
+    app.replay_to_watch = app.results.replay_path;
+  switch_screen(app, index == kBack ? Screen::SongSelect : Screen::Gameplay);
 }
 
 struct Spread {
@@ -110,8 +114,9 @@ void results_draw(App& app) {
       fit_text(app.bold, info.artist + " - " + info.title, 28, app.width - 80),
       40, 52, 28, kWhite);
   draw_text_shadowed(r, app.regular,
-                     "[" + info.version + "]   mapped by " + info.creator, 40,
-                     80, 17, fade(kWhite, 0.8f));
+                     "[" + info.version + "]   mapped by " + info.creator +
+                         "   played by " + results.player,
+                     40, 80, 17, fade(kWhite, 0.8f));
 
   // Totals count up as the screen opens.
   const f32 count_up = ease_out(t / 1.0f);
@@ -184,9 +189,10 @@ void results_draw(App& app) {
     }
   }
 
-  const char* labels[] = {"RETRY", "BACK"};
-  const Color accents[] = {hex_color(0xDD9933), hex_color(0x6655CC)};
-  for (i32 i = 0; i < 2; ++i) {
+  const char* labels[] = {"RETRY", "WATCH", "BACK"};
+  const Color accents[] = {hex_color(0xDD9933), hex_color(0x33AA88),
+                           hex_color(0x6655CC)};
+  for (i32 i = 0; i < kButtonCount; ++i) {
     const Button b = button(app, i);
     draw_button(app, b.x, b.y, b.w, b.h, labels[i],
                 results.hovered == i ? 1.0f : 0.0f, accents[i]);
@@ -197,10 +203,12 @@ void results_key(App& app, i32 key, i32 action) {
   if (action != GLFW_PRESS)
     return;
   if (key == GLFW_KEY_R || key == GLFW_KEY_GRAVE_ACCENT)
-    activate(app, 0);
+    activate(app, kRetry);
+  else if (key == GLFW_KEY_W)
+    activate(app, kWatch);
   else if (key == GLFW_KEY_ESCAPE || key == GLFW_KEY_ENTER ||
            key == GLFW_KEY_KP_ENTER)
-    activate(app, 1);
+    activate(app, kBack);
 }
 
 void results_click(App& app, i32 button, i32 action) {

@@ -1,4 +1,5 @@
 #include <circles/library.h>
+#include <circles/md5.h>
 #include <circles/strings.h>
 
 #include <algorithm>
@@ -6,6 +7,8 @@
 #include <cmath>
 #include <fosu/beatmap.h>
 #include <fosu/parser.h>
+#include <fstream>
+#include <iterator>
 #include <string_view>
 #include <system_error>
 
@@ -15,11 +18,19 @@ namespace {
 
 namespace fs = std::filesystem;
 
+std::string file_md5(const fs::path& path) {
+  std::ifstream         file(path, std::ios::binary);
+  const std::vector<u8> data((std::istreambuf_iterator<char>(file)),
+                             std::istreambuf_iterator<char>());
+  return md5_hex(data);
+}
+
 BeatmapInfo summarize(const fosu::Beatmap& map,
                       const fs::path&      path,
                       const fs::path&      folder) {
   BeatmapInfo info{
       .osu_path = path.string(),
+      .md5 = file_md5(path),
       .title = std::string(map.title),
       .artist = std::string(map.artist),
       .creator = std::string(map.creator),

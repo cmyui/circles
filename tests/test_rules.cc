@@ -15,16 +15,19 @@ static void test_difficulty_settings_convert_to_gameplay_values() {
   CHECK_EQ(windows.hit300, 32);
   CHECK_EQ(windows.hit100, 76);
   CHECK_EQ(windows.hit50, 120);
+  // Fractional windows truncate to whole ms.
+  CHECK_EQ(circles::hit_windows(8.5).hit300, 29);
 }
 
 static void test_presses_are_judged_by_error_on_either_side() {
   using circles::Judgement;
   const auto windows = circles::hit_windows(5);  // 50, 100 and 150 ms
-  CHECK(circles::judge_press(windows, -50) == Judgement::Hit300);
-  CHECK(circles::judge_press(windows, 50) == Judgement::Hit300);
-  CHECK(circles::judge_press(windows, 51) == Judgement::Hit100);
-  CHECK(circles::judge_press(windows, -150) == Judgement::Hit50);
-  CHECK(circles::judge_press(windows, 151) == Judgement::Miss);
+  CHECK(circles::judge_press(windows, -49) == Judgement::Hit300);
+  CHECK(circles::judge_press(windows, 49) == Judgement::Hit300);
+  // A window's edge belongs to the next judgement.
+  CHECK(circles::judge_press(windows, 50) == Judgement::Hit100);
+  CHECK(circles::judge_press(windows, -149) == Judgement::Hit50);
+  CHECK(circles::judge_press(windows, 150) == Judgement::Miss);
 }
 
 static void test_sliders_are_judged_by_the_fraction_of_parts_hit() {

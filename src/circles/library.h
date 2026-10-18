@@ -20,6 +20,7 @@ struct BeatSection {
 // for gameplay.
 struct BeatmapInfo {
   std::string              osu_path;
+  std::string              md5;  // of the .osu file; replays name maps by it
   std::string              title;
   std::string              artist;
   std::string              creator;

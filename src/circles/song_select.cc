@@ -5,6 +5,7 @@
 #include <cctype>
 #include <cmath>
 #include <cstdio>
+#include <ctime>
 #include <random>
 #include <sstream>
 #include <string>
@@ -22,6 +23,7 @@ constexpr f32 kDifficultyIndent = 56;
 // How far a press may move before it scrolls instead of clicking.
 constexpr f32 kDragThreshold = 6;
 constexpr f32 kWheelStep = 90;  // points per scroll wheel notch
+constexpr f32 kReplayRowHeight = 46;
 
 // A carousel row: a set, or one of the selected set's difficulties.
 struct Row {
@@ -165,6 +167,69 @@ void start(App& app) {
   switch_screen(app, Screen::Gameplay);
 }
 
+void watch(App& app, const ReplayEntry& entry) {
+  app.replay_to_watch = entry.path.string();
+  start(app);
+}
+
+// The selected map's replays sit in a panel under its details.
+f32 panel_width(const App& app) {
+  return std::min(app.width * 0.44f, 560.0f);
+}
+
+constexpr f32 kReplayPanelTop = 292;
+
+// As many replays as fit above the footer.
+size_t visible_replays(const App& app, size_t count) {
+  const f32 room = app.height - 80 - kReplayPanelTop - 44;
+  return std::min(count,
+                  static_cast<size_t>(std::max(0.0f, room / kReplayRowHeight)));
+}
+
+Rect replay_row(const App& app, size_t index) {
+  return {32, kReplayPanelTop + 40 + index * kReplayRowHeight,
+          panel_width(app) - 16, kReplayRowHeight - 4};
+}
+
+void draw_replays(App& app) {
+  auto&      r = app.renderer;
+  const auto replays = map_replays(app, app.selected_map);
+  const auto count = visible_replays(app, replays.size());
+  const f32  w = panel_width(app);
+  draw_rounded_rect(r, 24, kReplayPanelTop, w,
+                    48 + std::max<size_t>(count, 1) * kReplayRowHeight, 16,
+                    fade(hex_color(0x101020), 0.8f));
+  draw_text(r, app.bold, "Replays", 44, kReplayPanelTop + 28, 16, kWhite);
+  if (replays.empty()) {
+    draw_text(r, app.regular, "None yet. Every play you finish is saved.", 44,
+              kReplayPanelTop + 66, 14, fade(kWhite, 0.55f));
+    return;
+  }
+  for (size_t i = 0; i < count; ++i) {
+    const Replay& replay = replays[i]->replay;
+    const Rect    row = replay_row(app, i);
+    if (static_cast<i32>(i) == app.select.hovered_replay)
+      draw_rounded_rect(r, row.x, row.y, row.w, row.h, 10, fade(kWhite, 0.12f));
+    const Grade grade_ = grade(replay.counts);
+    draw_text_shadowed(r, app.heavy, grade_name(grade_), row.x + 24,
+                       centered_baseline(app.heavy, 24, row.y + row.h / 2), 24,
+                       grade_colour(grade_), Align::Center);
+    draw_text(r, app.bold, fit_text(app.bold, replay.player, 16, row.w - 170),
+              row.x + 52, row.y + 18, 16, kWhite);
+    char stats[96];
+    snprintf(stats, sizeof(stats), "%lld    %.2f%%    %dx",
+             static_cast<long long>(replay.score),
+             accuracy(replay.counts) * 100, replay.max_combo);
+    draw_text(r, app.regular, stats, row.x + 52, row.y + 36, 13,
+              fade(kWhite, 0.75f));
+    char       date[32];
+    const auto timestamp = static_cast<std::time_t>(replay.timestamp);
+    std::strftime(date, sizeof(date), "%Y-%m-%d", std::localtime(&timestamp));
+    draw_text(r, app.regular, date, row.x + row.w - 12, row.y + 18, 13,
+              fade(kWhite, 0.55f), Align::Right);
+  }
+}
+
 void draw_stat_bar(App&        app,
                    f32         x,
                    f32         y,
@@ -188,7 +253,7 @@ void draw_info_panel(App& app) {
     return;
   auto&       r = app.renderer;
   const auto& info = app.library.maps[app.selected_map];
-  const f32   x = 24, y = 24, w = std::min(app.width * 0.44f, 560.0f), h = 252;
+  const f32   x = 24, y = 24, w = panel_width(app), h = 252;
   const f32   text_x = x + 20, text_w = w - 40;
   draw_rounded_rect(r, x, y, w, h, 16, fade(hex_color(0x101020), 0.8f));
   f32 line = y + 46;
@@ -387,6 +452,17 @@ void select_update(App& app) {
   if (hovered != select.hovered_row && hovered >= 0 && !select.dragging)
     play_sound(app.audio, Sound::MenuHover, 0.3f);
   select.hovered_row = hovered;
+
+  i32        hovered_replay = -1;
+  const auto replays = map_replays(app, app.selected_map);
+  for (size_t i = 0; i < visible_replays(app, replays.size()); ++i) {
+    const Rect row = replay_row(app, i);
+    if (contains(app.cursor, row.x, row.y, row.w, row.h))
+      hovered_replay = static_cast<i32>(i);
+  }
+  if (hovered_replay != select.hovered_replay && hovered_replay >= 0)
+    play_sound(app.audio, Sound::MenuHover, 0.3f);
+  select.hovered_replay = hovered_replay;
 }
 
 void select_draw(App& app) {
@@ -426,6 +502,8 @@ void select_draw(App& app) {
   draw_rect_gradient(r, 0, 0, app.width, 96, fade(kBlack, 0.75f),
                      fade(kBlack, 0));
   draw_info_panel(app);
+  if (app.selected_map >= 0)
+    draw_replays(app);
   draw_search_box(app);
   draw_rect_gradient(r, 0, app.height - 64, app.width, 64, fade(kBlack, 0),
                      fade(kBlack, 0.7f));
@@ -500,12 +578,17 @@ void select_click(App& app, i32 button, i32 action) {
   // Holding the right button on empty space jumps through the list, as in
   // osu!, which keeps right-clicks on a row for its beatmap options.
   if (button == GLFW_MOUSE_BUTTON_RIGHT) {
-    select.right_down = action == GLFW_PRESS && select.hovered_row < 0;
+    select.right_down = action == GLFW_PRESS && select.hovered_row < 0 &&
+                        select.hovered_replay < 0;
     select.fling = 0;
     return;
   }
   if (button != GLFW_MOUSE_BUTTON_LEFT)
     return;
+  if (action == GLFW_PRESS && select.hovered_replay >= 0) {
+    watch(app, *map_replays(app, app.selected_map)[select.hovered_replay]);
+    return;
+  }
   if (action == GLFW_PRESS) {
     if (!in_carousel(app))
       return;

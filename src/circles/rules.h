@@ -41,18 +41,21 @@ struct HitWindows {
   f64 hit50;
 };
 
+// Whole ms, as osu!stable truncates them.
 inline HitWindows hit_windows(f64 od) {
-  return {80 - 6 * od, 140 - 8 * od, 200 - 10 * od};
+  return {std::floor(80 - 6 * od), std::floor(140 - 8 * od),
+          std::floor(200 - 10 * od)};
 }
 
 // Judgement for a press `offset` ms from an object's time (negative is early).
+// A press must land strictly inside a window, as in osu!stable.
 inline Judgement judge_press(const HitWindows& windows, f64 offset) {
   const f64 error = std::abs(offset);
-  if (error <= windows.hit300)
+  if (error < windows.hit300)
     return Judgement::Hit300;
-  if (error <= windows.hit100)
+  if (error < windows.hit100)
     return Judgement::Hit100;
-  if (error <= windows.hit50)
+  if (error < windows.hit50)
     return Judgement::Hit50;
   return Judgement::Miss;
 }
