@@ -2044,7 +2044,11 @@ void gameplay_key(App& app, i32 key, i32 action, f64 /*wall*/) {
     return;
   switch (key) {
     case GLFW_KEY_ESCAPE:
-      pause(app);
+      // Once the play has passed, stable skips straight to the results.
+      if (!game.finished)
+        pause(app);
+      else if (app.transition_started < 0)
+        finish(app);
       break;
     case GLFW_KEY_SPACE:
       skip_intro(app);
