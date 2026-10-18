@@ -1,7 +1,10 @@
 #include <circles/app.h>
 
 #include <chrono>
+#include <cstdio>
+#include <cstring>
 #include <memory>
+#include <string>
 #include <thread>
 
 namespace {
@@ -10,9 +13,47 @@ circles::App& app_of(GLFWwindow* window) {
   return *static_cast<circles::App*>(glfwGetWindowUserPointer(window));
 }
 
+// For measuring: `--benchmark <replay.osr>` watches a replay silently while
+// profiling and exits at its results, saving the profile to perf/.
+// `--size WxH` sets the window, `--uncapped` lifts the frame cap and
+// `--vsync` waits for the display.
+struct Options {
+  std::string benchmark;
+  int         width = 0;
+  int         height = 0;
+  bool        uncapped = false;
+  bool        vsync = false;
+};
+
+bool parse_options(int argc, char** argv, Options& options) {
+  for (int i = 1; i < argc; ++i) {
+    const bool has_value = i + 1 < argc;
+    if (!std::strcmp(argv[i], "--benchmark") && has_value)
+      options.benchmark = argv[++i];
+    else if (!std::strcmp(argv[i], "--size") && has_value &&
+             std::sscanf(argv[++i], "%dx%d", &options.width, &options.height) ==
+                 2)
+      continue;
+    else if (!std::strcmp(argv[i], "--uncapped"))
+      options.uncapped = true;
+    else if (!std::strcmp(argv[i], "--vsync"))
+      options.vsync = true;
+    else {
+      std::fprintf(stderr,
+                   "usage: circles [--benchmark replay.osr] [--size WxH] "
+                   "[--uncapped] [--vsync]\n");
+      return false;
+    }
+  }
+  return true;
+}
+
 }  // namespace
 
-int main() {
+int main(int argc, char** argv) {
+  Options options;
+  if (!parse_options(argc, argv, options))
+    return 2;
   // On the heap so the audio engine inside never moves.
   auto app = std::make_unique<circles::App>();
   if (!circles::app_init(*app))
@@ -38,22 +79,50 @@ int main() {
   glfwSetWindowFocusCallback(window, [](GLFWwindow* w, int focused) {
     circles::app_focus(app_of(w), focused);
   });
+  if (options.width > 0 && options.height > 0)
+    glfwSetWindowSize(window, options.width, options.height);
+  app->vsync = options.vsync;
+  glfwSwapInterval(app->vsync ? 1 : 0);
+  if (!options.benchmark.empty() &&
+      !circles::app_start_benchmark(*app, options.benchmark)) {
+    std::fprintf(stderr, "can't benchmark %s: no such replay or map\n",
+                 options.benchmark.c_str());
+    circles::app_shutdown(*app);
+    return 1;
+  }
 
   // GLFW delivers input when a frame polls for it, so a hit's time is only as
   // precise as the frame rate. Frames run up to 1000 per second, sleeping
   // between them rather than spinning a core.
-  constexpr auto kFrameInterval = std::chrono::microseconds(1000);
-  auto           next_frame = std::chrono::steady_clock::now();
+  const auto frame_interval =
+      std::chrono::microseconds(options.uncapped ? 0 : 1000);
+  auto  next_frame = std::chrono::steady_clock::now();
+  auto& profiler = app->profiler;
+  using circles::FramePhase;
   while (!glfwWindowShouldClose(window) && !app->quit) {
+    circles::profile_frame_begin(profiler,
+                                 static_cast<circles::u8>(app->screen));
     glfwPollEvents();
+    circles::profile_phase(profiler, FramePhase::Poll);
     circles::app_frame(*app, glfwGetTime());
     glfwSwapBuffers(window);
-    next_frame += kFrameInterval;
+    circles::profile_phase(profiler, FramePhase::Swap);
+    next_frame += frame_interval;
     const auto now = std::chrono::steady_clock::now();
     if (next_frame < now)
       next_frame = now;
     else
       std::this_thread::sleep_until(next_frame);
+    circles::profile_phase(profiler, FramePhase::Sleep);
+    circles::profile_frame_end(profiler, app->renderer.draw_calls,
+                               app->renderer.vertices_drawn);
+    if (!options.benchmark.empty() && app->screen == circles::Screen::Results) {
+      const std::string path = circles::app_finish_benchmark(*app);
+      std::printf("profile: %s\n", path.empty()
+                                       ? "stopped early (saved with F8)"
+                                       : path.c_str());
+      break;
+    }
   }
   circles::app_shutdown(*app);
 }

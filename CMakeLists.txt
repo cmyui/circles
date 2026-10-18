@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.26)
-project(circles LANGUAGES C CXX)
+project(circles LANGUAGES C CXX OBJCXX)
 include(CTest)
 
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
@@ -43,6 +43,8 @@ add_library(circles_core STATIC
   src/circles/menu.cc
   src/circles/mod_select.cc
   src/circles/mods.cc
+  src/circles/profiler.cc
+  src/circles/profiler_macos.mm
   src/circles/replay.cc
   src/circles/results.cc
   src/circles/skin.cc
@@ -56,7 +58,8 @@ target_compile_options(circles_core PRIVATE -Wall -Wextra)
 # multiply-adds would change its judgements' arithmetic.
 target_compile_options(circles_core PUBLIC -ffp-contract=off)
 target_link_libraries(circles_core PUBLIC
-  circles_third_party PkgConfig::GLFW PkgConfig::LZMA "-framework OpenGL")
+  circles_third_party PkgConfig::GLFW PkgConfig::LZMA "-framework OpenGL"
+  "-framework AppKit")
 
 add_executable(circles src/circles/main.cc)
 target_compile_options(circles PRIVATE -Wall -Wextra)

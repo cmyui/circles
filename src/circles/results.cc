@@ -97,6 +97,25 @@ void draw_histogram(App& app, f32 x, f32 y, f32 w, f32 h, f32 s) {
 
 }  // namespace
 
+void open_score(App& app, i32 map, const ReplayEntry& entry) {
+  const Replay& replay = entry.replay;
+  play_sound(app.audio, Sound::MenuClick, 0.7f);
+  // An .osr holds the score but not its hit errors; judging it finds them.
+  judge_replay(app, map, entry.path.string());
+  app.results = Results{
+      .map_index = map,
+      .score = replay.score,
+      .max_combo = replay.max_combo,
+      .counts = replay.counts,
+      .offsets = app.game.offsets,
+      .hit50_window = app.game.windows.hit50,
+      .player = replay.player,
+      .replay_path = entry.path.string(),
+      .mods = replay.mods,
+  };
+  switch_screen(app, Screen::Results);
+}
+
 void results_enter(App& app) {
   app.results.entered = app.now;
   app.results.hovered = -1;

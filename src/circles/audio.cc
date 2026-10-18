@@ -528,6 +528,19 @@ f64 music_length(const Audio& audio) {
   return length * 1000.0 / music_sample_rate(audio);
 }
 
+f64 audio_file_length(const Audio& audio, const std::string& path) {
+  if (audio.music_loaded && audio.music_path == path)
+    return music_length(audio);
+  ma_decoder decoder;
+  if (ma_decoder_init_file(path.c_str(), nullptr, &decoder) != MA_SUCCESS)
+    return 0;
+  ma_uint64 length = 0;
+  ma_decoder_get_length_in_pcm_frames(&decoder, &length);
+  const f64 ms = length * 1000.0 / decoder.outputSampleRate;
+  ma_decoder_uninit(&decoder);
+  return ms;
+}
+
 f64 music_position(const Audio& audio) {
   if (!audio.music_loaded)
     return 0;
@@ -562,7 +575,7 @@ void music_fade_in(Audio& audio, f32 ms) {
 }
 
 void play_sound(Audio& audio, Sound sound, f32 volume, f32 pan) {
-  if (!audio.ready)
+  if (!audio.ready || audio.effects_muted)
     return;
   auto&  bank = audio.sounds[static_cast<i32>(sound)];
   Voice& voice = bank.voices[bank.next];

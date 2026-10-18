@@ -889,6 +889,8 @@ void draw_slider_body(App&                  app,
   glDepthMask(GL_TRUE);
   glDepthFunc(GL_LESS);
   glDisable(GL_DEPTH_TEST);
+  app.renderer.draw_calls += 2;
+  app.renderer.vertices_drawn += 12 * count;
 }
 
 // Points from `at` back along the slider, toward `toward`.
@@ -1660,7 +1662,54 @@ SliderRenderer create_slider_renderer() {
   return s;
 }
 
-bool gameplay_start(App& app, i32 map_index, std::string replay_path) {
+namespace {
+
+// Stable judges a replay at each of its frames. Between them its game loop
+// still runs every display frame, turning spinners and draining health, and
+// for Auto scoring sliders, with the cursor eased between frames; here, every
+// ms. Steps the replay up to `now`.
+StepOutcome step_replay(App& app, i32 now) {
+  auto&       game = app.game;
+  StepOutcome outcome = StepOutcome::Continue;
+  const auto& frames = game.frames;
+  while (outcome == StepOutcome::Continue) {
+    const bool frame_due =
+        game.next_frame < frames.size() && frames[game.next_frame].time <= now;
+    const f64 until = frame_due ? frames[game.next_frame].time : now + 1;
+    while (game.replay_tick < until && outcome == StepOutcome::Continue) {
+      const i32 time = static_cast<i32>(game.replay_tick);
+      game.replay_tick += 1;
+      if (game.next_frame == 0)
+        continue;
+      const ReplayFrame& from = frames[game.next_frame - 1];
+      Vec2               cursor = from.position;
+      if (game.next_frame < frames.size()) {
+        const ReplayFrame& to = frames[game.next_frame];
+        if (to.time != from.time)
+          cursor = lerp(
+              from.position, to.position,
+              std::max(0.0f, 1 - static_cast<f32>(to.time - time) /
+                                     static_cast<f32>(to.time - from.time)));
+      }
+      outcome = play_step(app, time, cursor, from.keys, false);
+    }
+    if (!frame_due || outcome != StepOutcome::Continue)
+      break;
+    const ReplayFrame& frame = frames[game.next_frame++];
+    show_replay_keys(game, frame.keys);
+    outcome = play_step(app, static_cast<i32>(frame.time), frame.position,
+                        frame.keys, true);
+    game.replay_tick = std::max(game.replay_tick, frame.time + 1);
+  }
+  return outcome;
+}
+
+// A play's setup: the map, its objects and judging, and a replay's frames.
+// To be played, it loads the song; to be judged only, it reads its length.
+bool load_gameplay(App&        app,
+                   i32         map_index,
+                   std::string replay_path,
+                   bool        play) {
   if (map_index < 0)
     return false;
   const auto& info = app.library.maps[map_index];
@@ -1715,9 +1764,14 @@ bool gameplay_start(App& app, i32 map_index, std::string replay_path) {
       sample_set_or(static_cast<i32>(map.sample_set), SampleSet::Normal);
 
   game.breaks = stable_breaks(map);
-  game.audio_ok = music_load(app.audio, info.audio_path);
-  game.objects = build_hit_objects(
-      map, {difficulty.od, game.audio_ok ? music_length(app.audio) : 0});
+  f64 audio_length = 0;
+  if (play) {
+    game.audio_ok = music_load(app.audio, info.audio_path);
+    audio_length = game.audio_ok ? music_length(app.audio) : 0;
+  } else {
+    audio_length = audio_file_length(app.audio, info.audio_path);
+  }
+  game.objects = build_hit_objects(map, {difficulty.od, audio_length});
   if (game.objects.empty())
     return false;
   // Each sound takes its sample set and volume from the timing point just
@@ -1811,6 +1865,15 @@ bool gameplay_start(App& app, i32 map_index, std::string replay_path) {
     game.autopilot_frames = autoplay_frames(game);
   }
   game.cursor = game.flashlight_position = app.cursor;
+  return true;
+}
+
+}  // namespace
+
+bool gameplay_start(App& app, i32 map_index, std::string replay_path) {
+  if (!load_gameplay(app, map_index, std::move(replay_path), true))
+    return false;
+  auto& game = app.game;
   if (game.audio_ok) {
     music_pause(app.audio);
     music_set_rate(app.audio, game.rate, !mods_change_pitch(game.mods));
@@ -1821,6 +1884,20 @@ bool gameplay_start(App& app, i32 map_index, std::string replay_path) {
   }
   select_map(app, map_index, false);
   return true;
+}
+
+bool judge_replay(App& app, i32 map_index, std::string replay_path) {
+  if (!load_gameplay(app, map_index, std::move(replay_path), false))
+    return false;
+  auto& game = app.game;
+  // Judging plays nothing; Easy's revive only pauses the music, so it goes on.
+  app.audio.effects_muted = true;
+  StepOutcome outcome = StepOutcome::Continue;
+  do
+    outcome = step_replay(app, static_cast<i32>(game.end_time) + 201);
+  while (outcome == StepOutcome::Recover);
+  app.audio.effects_muted = false;
+  return outcome == StepOutcome::Continue;
 }
 
 void gameplay_update(App& app) {
@@ -1862,40 +1939,7 @@ void gameplay_update(App& app) {
   const i32   now = game_time(app);
   StepOutcome outcome = StepOutcome::Continue;
   if (game.watching) {
-    // Stable judges a replay at each of its frames. Between them its game
-    // loop still runs every display frame, turning spinners and draining
-    // health, and for Auto scoring sliders, with the cursor eased between
-    // frames; here, every ms.
-    const auto& frames = game.frames;
-    while (outcome == StepOutcome::Continue) {
-      const bool frame_due = game.next_frame < frames.size() &&
-                             frames[game.next_frame].time <= now;
-      const f64  until = frame_due ? frames[game.next_frame].time : now + 1;
-      while (game.replay_tick < until && outcome == StepOutcome::Continue) {
-        const i32 time = static_cast<i32>(game.replay_tick);
-        game.replay_tick += 1;
-        if (game.next_frame == 0)
-          continue;
-        const ReplayFrame& from = frames[game.next_frame - 1];
-        Vec2               cursor = from.position;
-        if (game.next_frame < frames.size()) {
-          const ReplayFrame& to = frames[game.next_frame];
-          if (to.time != from.time)
-            cursor = lerp(
-                from.position, to.position,
-                std::max(0.0f, 1 - static_cast<f32>(to.time - time) /
-                                       static_cast<f32>(to.time - from.time)));
-        }
-        outcome = play_step(app, time, cursor, from.keys, false);
-      }
-      if (!frame_due || outcome != StepOutcome::Continue)
-        break;
-      const ReplayFrame& frame = frames[game.next_frame++];
-      show_replay_keys(game, frame.keys);
-      outcome = play_step(app, static_cast<i32>(frame.time), frame.position,
-                          frame.keys, true);
-      game.replay_tick = std::max(game.replay_tick, frame.time + 1);
-    }
+    outcome = step_replay(app, now);
     game.time = now;
     follow_replay_cursor(app);
   } else {

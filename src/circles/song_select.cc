@@ -167,12 +167,7 @@ void start(App& app) {
   switch_screen(app, Screen::Gameplay);
 }
 
-void watch(App& app, const ReplayEntry& entry) {
-  app.replay_to_watch = entry.path.string();
-  start(app);
-}
-
-// The selected map's replays sit in a panel under its details.
+// The selected map's local scores sit in a panel under its details.
 f32 panel_width(const App& app) {
   return std::min(app.width * 0.44f, 560.0f);
 }
@@ -199,7 +194,7 @@ void draw_replays(App& app) {
   draw_rounded_rect(r, 24, kReplayPanelTop, w,
                     48 + std::max<size_t>(count, 1) * kReplayRowHeight, 16,
                     fade(hex_color(0x101020), 0.8f));
-  draw_text(r, app.bold, "Replays", 44, kReplayPanelTop + 28, 16, kWhite);
+  draw_text(r, app.bold, "Local scores", 44, kReplayPanelTop + 28, 16, kWhite);
   if (replays.empty()) {
     draw_text(r, app.regular, "None yet. Every play you finish is saved.", 44,
               kReplayPanelTop + 66, 14, fade(kWhite, 0.55f));
@@ -210,19 +205,23 @@ void draw_replays(App& app) {
     const Rect    row = replay_row(app, i);
     if (static_cast<i32>(i) == app.select.hovered_replay)
       draw_rounded_rect(r, row.x, row.y, row.w, row.h, 10, fade(kWhite, 0.12f));
+    const std::string rank = std::to_string(i + 1);
+    draw_text(r, app.bold, rank, row.x + 22,
+              centered_baseline(app.bold, 14, row.y + row.h / 2), 14,
+              fade(kWhite, 0.6f), Align::Center);
     const Grade grade_ = grade(replay.counts);
-    draw_text_shadowed(r, app.heavy, grade_name(grade_), row.x + 24,
+    draw_text_shadowed(r, app.heavy, grade_name(grade_), row.x + 54,
                        centered_baseline(app.heavy, 24, row.y + row.h / 2), 24,
                        grade_colour(grade_, replay.mods), Align::Center);
-    draw_text(r, app.bold, fit_text(app.bold, replay.player, 16, row.w - 170),
-              row.x + 52, row.y + 18, 16, kWhite);
+    draw_text(r, app.bold, fit_text(app.bold, replay.player, 16, row.w - 200),
+              row.x + 82, row.y + 18, 16, kWhite);
     char              stats[96];
     const std::string mods = mod_acronyms(replay.mods);
     snprintf(stats, sizeof(stats), "%lld    %.2f%%    %dx%s%s",
              static_cast<long long>(replay.score),
              accuracy(replay.counts) * 100, replay.max_combo,
              mods.empty() ? "" : "    +", mods.c_str());
-    draw_text(r, app.regular, stats, row.x + 52, row.y + 36, 13,
+    draw_text(r, app.regular, stats, row.x + 82, row.y + 36, 13,
               fade(kWhite, 0.75f));
     char       date[32];
     const auto timestamp = static_cast<std::time_t>(replay.timestamp);
@@ -641,7 +640,8 @@ void select_click(App& app, i32 button, i32 action) {
   if (button != GLFW_MOUSE_BUTTON_LEFT)
     return;
   if (action == GLFW_PRESS && select.hovered_replay >= 0) {
-    watch(app, *map_replays(app, app.selected_map)[select.hovered_replay]);
+    open_score(app, app.selected_map,
+               *map_replays(app, app.selected_map)[select.hovered_replay]);
     return;
   }
   if (action == GLFW_PRESS) {

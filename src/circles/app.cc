@@ -195,7 +195,7 @@ void toggle_fullscreen(App& app) {
     glfwSetWindowMonitor(app.window, monitor, 0, 0, mode->width, mode->height,
                          mode->refreshRate);
   }
-  glfwSwapInterval(0);
+  glfwSwapInterval(app.vsync ? 1 : 0);
   app.fullscreen = !app.fullscreen;
 }
 
@@ -258,8 +258,124 @@ void draw_cursor(App& app) {
   draw_circle(r, position.x, position.y, size * 0.3f, warm);
 }
 
+constexpr const char* kProfileDirectory = "perf";
+
+void toggle_profiling(App& app) {
+  auto& profiler = app.profiler;
+  if (!profiler.active) {
+    profiler_start(profiler, true);
+    show_toast(app, "Profiling; F8 again saves it");
+    return;
+  }
+  const std::string path = profiler_stop(profiler, kProfileDirectory);
+  show_toast(app, path.empty() ? "Couldn't save the profile" : "Saved " + path);
+}
+
+f32 percentile(std::vector<f32> values, f32 fraction) {
+  if (values.empty())
+    return 0;
+  const auto nth = values.begin() +
+                   static_cast<std::ptrdiff_t>(fraction * (values.size() - 1));
+  std::nth_element(values.begin(), nth, values.end());
+  return *nth;
+}
+
+// The last second's frame phases and input, and a graph of recent frames.
+void draw_profiler_overlay(App& app) {
+  auto&                         r = app.renderer;
+  const auto&                   profiler = app.profiler;
+  const auto&                   frames = profiler.frames;
+  const f64                     now = uptime();
+  constexpr Color               kPhaseColours[] = {{0.6f, 0.6f, 0.6f, 1},
+                                                   {1, 0.6f, 0.2f, 1},
+                                                   {0.3f, 0.6f, 1, 1},
+                                                   {1, 0.3f, 0.3f, 1},
+                                                   {0.25f, 0.25f, 0.3f, 1}};
+  std::array<f64, kFramePhases> sums{};
+  f64                           gpu = 0;
+  i32                           count = 0, gpu_count = 0;
+  u64                           draws = 0, vertices = 0;
+  std::vector<f32>              frame_ms;
+  for (size_t i = frames.size(); i-- > 0 && now - frames[i].start < 1;) {
+    f32 total = 0;
+    for (i32 p = 0; p < kFramePhases; ++p) {
+      sums[p] += frames[i].phase_ms[p];
+      total += frames[i].phase_ms[p];
+    }
+    frame_ms.push_back(total);
+    if (frames[i].gpu_ms >= 0) {
+      gpu += frames[i].gpu_ms;
+      ++gpu_count;
+    }
+    draws += frames[i].draw_calls;
+    vertices += frames[i].vertices;
+    ++count;
+  }
+  std::array<i32, 3> device_events{};
+  std::vector<f32>   delays;
+  for (size_t i = profiler.inputs.size();
+       i-- > 0 && now - profiler.inputs[i].received < 1;) {
+    ++device_events[static_cast<i32>(profiler.inputs[i].device)];
+    delays.push_back(static_cast<f32>(
+        (profiler.inputs[i].received - profiler.inputs[i].event_time) * 1000));
+  }
+
+  const f32 x = 12, y = 56, w = 420, graph_h = 60;
+  draw_rounded_rect(r, x, y, w, 120 + graph_h, 10, fade(kBlack, 0.75f));
+  char      line[256];
+  const f32 n = static_cast<f32>(std::max(count, 1));
+  snprintf(line, sizeof(line),
+           "Profiling (F8 saves)   %d fps   frame p50 %.2f  p99 %.2f ms", count,
+           percentile(frame_ms, 0.5f), percentile(frame_ms, 0.99f));
+  draw_text(r, app.regular, line, x + 10, y + 20, 12, kWhite);
+  snprintf(line, sizeof(line),
+           "poll %.3f  update %.3f  draw %.3f  swap %.3f  sleep %.3f ms",
+           sums[0] / n, sums[1] / n, sums[2] / n, sums[3] / n, sums[4] / n);
+  draw_text(r, app.regular, line, x + 10, y + 40, 12, kWhite);
+  snprintf(line, sizeof(line), "gpu %.3f ms   %.0f draws   %.0f vertices",
+           gpu_count ? gpu / gpu_count : -1.0, draws / n, vertices / n);
+  draw_text(r, app.regular, line, x + 10, y + 60, 12, kWhite);
+  snprintf(
+      line, sizeof(line),
+      "input/s: keys %d  mouse %d  tablet %d   delay p50 %.2f  p99 %.2f ms",
+      device_events[0], device_events[1], device_events[2],
+      percentile(delays, 0.5f), percentile(delays, 0.99f));
+  draw_text(r, app.regular, line, x + 10, y + 80, 12, kWhite);
+
+  // Each recent frame's phases, stacked; 4 ms fills the graph.
+  const f32    graph_y = y + 100, bar = 4, scale = graph_h / 4;
+  const size_t shown =
+      std::min<size_t>(frames.size(), static_cast<size_t>((w - 20) / bar));
+  for (size_t k = 0; k < shown; ++k) {
+    const FrameRecord& f = frames[frames.size() - shown + k];
+    f32                top = graph_y + graph_h;
+    for (i32 p = 0; p < kFramePhases; ++p) {
+      const f32 h = std::min(f.phase_ms[p] * scale, top - graph_y);
+      top -= h;
+      draw_rect(r, x + 10 + k * bar, top, bar, h, kPhaseColours[p]);
+    }
+    if (f.gpu_ms >= 0)
+      draw_rect(r, x + 10 + k * bar,
+                graph_y + graph_h - std::min(f.gpu_ms * scale, graph_h), bar,
+                1.5f, kWhite);
+  }
+  constexpr const char* kPhaseNames[] = {"poll", "update", "draw", "swap",
+                                         "sleep"};
+  f32                   legend_x = x + 10;
+  for (i32 p = 0; p < kFramePhases; ++p) {
+    draw_rect(r, legend_x, graph_y + graph_h + 8, 8, 8, kPhaseColours[p]);
+    draw_text(r, app.regular, kPhaseNames[p], legend_x + 12,
+              graph_y + graph_h + 16, 11, fade(kWhite, 0.8f));
+    legend_x += 62;
+  }
+  draw_text(r, app.regular, "— gpu", legend_x, graph_y + graph_h + 16, 11,
+            fade(kWhite, 0.8f));
+}
+
 void draw_overlays(App& app) {
   auto& r = app.renderer;
+  if (app.profiler.active && app.profiler.overlay)
+    draw_profiler_overlay(app);
   if (app.now - app.toast_time < kToastDuration) {
     const f32 alpha = clamp01(
         static_cast<f32>(std::min(app.now - app.toast_time,
@@ -308,6 +424,7 @@ bool app_init(App& app) {
   // Hits are timed when a frame reads input, so frames don't wait for the
   // display; main() caps their rate instead.
   glfwSwapInterval(0);
+  profiler_init(app.profiler);
   glfwSetInputMode(app.window, GLFW_CURSOR, GLFW_CURSOR_HIDDEN);
   glfwSetWindowSizeLimits(app.window, 800, 500, GLFW_DONT_CARE, GLFW_DONT_CARE);
 
@@ -396,7 +513,9 @@ void app_frame(App& app, f64 now) {
       results_update(app);
       break;
   }
+  profile_phase(app.profiler, FramePhase::Update);
 
+  profile_gpu_begin(app.profiler);
   glViewport(0, 0, pixels_wide, pixels_high);
   glClearColor(0, 0, 0, 1);
   glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
@@ -417,6 +536,8 @@ void app_frame(App& app, f64 now) {
   }
   draw_overlays(app);
   flush(app.renderer);
+  profile_gpu_end(app.profiler);
+  profile_phase(app.profiler, FramePhase::Draw);
 }
 
 void app_shutdown(App& app) {
@@ -429,6 +550,10 @@ void app_shutdown(App& app) {
 }
 
 void app_key(App& app, i32 key, i32 action) {
+  if (key == GLFW_KEY_F8 && action == GLFW_PRESS) {
+    toggle_profiling(app);
+    return;
+  }
   if (key == GLFW_KEY_F11 && action == GLFW_PRESS) {
     toggle_fullscreen(app);
     return;
@@ -521,6 +646,29 @@ void app_cursor(App& app, f64 x, f64 y) {
 void app_focus(App& app, bool focused) {
   if (!focused && app.screen == Screen::Gameplay)
     gameplay_focus_lost(app);
+}
+
+bool app_start_benchmark(App& app, const std::string& replay_path) {
+  const auto replay = read_replay(replay_path, false);
+  if (!replay)
+    return false;
+  i32 map = -1;
+  for (size_t m = 0; m < app.library.maps.size(); ++m)
+    if (app.library.maps[m].md5 == replay->beatmap_md5)
+      map = static_cast<i32>(m);
+  if (map < 0)
+    return false;
+  // Silent, without touching the saved volume.
+  set_master_volume(app.audio, 0);
+  select_map(app, map, false);
+  app.replay_to_watch = replay_path;
+  switch_screen(app, Screen::Gameplay);
+  profiler_start(app.profiler, false);
+  return true;
+}
+
+std::string app_finish_benchmark(App& app) {
+  return profiler_stop(app.profiler, kProfileDirectory);
 }
 
 void switch_screen(App& app, Screen screen) {

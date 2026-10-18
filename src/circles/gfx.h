@@ -118,6 +118,9 @@ struct Renderer {
   GLuint           texture = 0;  // sampled by the batched vertices
   f32              width = 0;    // window size in points
   f32              height = 0;
+  // This frame's draws, for profiling.
+  u32              draw_calls = 0;
+  u32              vertices_drawn = 0;
 };
 
 Renderer create_renderer();

@@ -8,6 +8,7 @@
 #include <circles/library.h>
 #include <circles/math.h>
 #include <circles/mods.h>
+#include <circles/profiler.h>
 #include <circles/replay.h>
 #include <circles/rules.h>
 #include <circles/skin.h>
@@ -284,6 +285,8 @@ struct Backdrop {
 
 // Not movable: Audio must stay put.
 struct App {
+  Profiler                 profiler;
+  bool                     vsync = false;
   GLFWwindow*              window = nullptr;
   f32                      width = 0;  // window size in points
   f32                      height = 0;
@@ -351,6 +354,11 @@ void app_focus(App& app, bool focused);
 
 // Fades out, switches, and fades back in.
 void switch_screen(App& app, Screen screen);
+// Watches `replay_path` silently while profiling. False if it or its map
+// can't be found.
+bool app_start_benchmark(App& app, const std::string& replay_path);
+// Stops profiling and saves it, returning the frames CSV's path.
+std::string app_finish_benchmark(App& app);
 // Shows the map's background and, with `preview`, plays its song from the
 // preview point unless it's already playing.
 void select_map(App& app, i32 map, bool preview);
@@ -371,7 +379,10 @@ void save_settings(const App& app);
 // Writes `replay` of `map` to replays/ and lists it. Returns its path, or
 // nothing if it couldn't be written.
 std::string save_replay(App& app, i32 map, Replay replay);
-// The replays of `map`, best score first.
+// The local leaderboard of `map`: its replays, best score first. The
+// replays folder is the score store, each .osr holding its score. If it
+// outgrows scanning at startup, or scores need data an .osr can't hold, a
+// database (e.g. SQLite) may be worth adding.
 std::vector<const ReplayEntry*> map_replays(const App& app, i32 map);
 
 bool contains(Vec2 point, f32 x, f32 y, f32 w, f32 h);
@@ -447,6 +458,9 @@ f32 mod_icon_height(const App& app);
 SliderRenderer create_slider_renderer();
 // Plays the map, or watches the replay at `replay_path` on it.
 bool gameplay_start(App& app, i32 map, std::string replay_path = {});
+// Judges the replay at `replay_path` silently, start to end, without touching
+// the music. False if it couldn't be loaded or the replay failed.
+bool judge_replay(App& app, i32 map, std::string replay_path);
 void gameplay_update(App& app);
 void gameplay_draw(App& app);
 // `wall` is when the input arrived, for timing the hit.
@@ -455,6 +469,8 @@ void gameplay_click(App& app, i32 button, i32 action, f64 wall);
 void gameplay_focus_lost(App& app);
 
 // results.cc
+// Shows a saved score's results, its hit errors from judging its replay.
+void open_score(App& app, i32 map, const ReplayEntry& entry);
 void results_enter(App& app);
 void results_update(App& app);
 void results_draw(App& app);

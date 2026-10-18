@@ -373,6 +373,8 @@ void begin_frame(Renderer& r, f32 width, f32 height) {
   r.width = width;
   r.height = height;
   r.vertices.clear();
+  r.draw_calls = 0;
+  r.vertices_drawn = 0;
 }
 
 void flush(Renderer& r) {
@@ -386,8 +388,10 @@ void flush(Renderer& r) {
   glBindBuffer(GL_ARRAY_BUFFER, r.vbo);
   glBufferData(GL_ARRAY_BUFFER, r.vertices.size() * sizeof(f32),
                r.vertices.data(), GL_STREAM_DRAW);
-  glDrawArrays(GL_TRIANGLES, 0,
-               static_cast<GLsizei>(r.vertices.size() / kFloatsPerVertex));
+  const auto count = static_cast<GLsizei>(r.vertices.size() / kFloatsPerVertex);
+  glDrawArrays(GL_TRIANGLES, 0, count);
+  ++r.draw_calls;
+  r.vertices_drawn += count;
   r.vertices.clear();
 }
 
