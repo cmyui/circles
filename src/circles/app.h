@@ -5,6 +5,7 @@
 #include <circles/hitsounds.h>
 #include <circles/library.h>
 #include <circles/math.h>
+#include <circles/mods.h>
 #include <circles/replay.h>
 #include <circles/rules.h>
 #include <circles/skin.h>
@@ -95,7 +96,8 @@ struct HitError {
   Judgement judgement;
 };
 
-enum class GamePhase : u8 { Playing, Paused, Failed };
+// Recovering is Easy's revive: the music waits while health refills.
+enum class GamePhase : u8 { Playing, Paused, Failed, Recovering };
 
 struct TrailPoint {
   f64  time;
@@ -106,6 +108,8 @@ struct TrailPoint {
 enum HitKey : u8 { kKey1, kKey2, kMouse1, kMouse2, kHitKeyCount };
 
 struct Gameplay {
+  Mods                          mods = 0;
+  f64                           rate = 1;  // song speed from the mods
   // The map stays parsed for its slider events and breaks.
   std::unique_ptr<fosu::Parser> parser;
   const fosu::Beatmap*          map = nullptr;
@@ -118,7 +122,10 @@ struct Gameplay {
   f64                           fade_in = 0;
   HitWindows                    windows{};
   f64                           hp = 0;
+  // Score V1's combo bonus scales by score_multiplier: the map's difficulty
+  // times the mods' multiplier. Score V2 scales by the mods' alone.
   f64                           score_multiplier = 1;
+  f64                           mod_multiplier = 1;
   f64                           end_time = 0;  // when the last object ends
 
   // The clock follows the music: audio time is clock_time plus the wall time
@@ -138,6 +145,12 @@ struct Gameplay {
   Counts counts;
   f64    health = 1;
   f32    displayed_health = 1;
+  // Score V2's tallies; see update_score_v2.
+  f64    combo_portion = 0;
+  f64    combo_portion_max = 1;  // a perfect play's
+  f64    bonus_portion = 0;
+  i32    recoveries = 0;  // Easy's revives left
+  bool   death = false;   // Sudden Death or Perfect was broken
   std::vector<f64>         offsets;
   std::vector<HitError>    recent_errors;
   std::vector<Popup>       popups;
@@ -156,9 +169,17 @@ struct Gameplay {
   std::string              replay_path;  // the replay being watched
   std::string              replay_player;
   size_t                   next_frame = 0;  // watching: the next to apply
-  // The cursor that hits, in window points: the mouse's, or the replay's.
+  // The cursor that hits, in window points: the mouse's, the replay's or
+  // Autopilot's.
   Vec2                     cursor{};
   std::deque<TrailPoint>   replay_trail;
+  // Autopilot's cursor follows a perfect play's.
+  std::vector<ReplayFrame> autopilot_frames;
+  // Flashlight's hole follows the cursor, in window points, and shrinks as
+  // the combo grows; its scale is osu!stable's for its texture.
+  Vec2                     flashlight_position{};
+  f32                      flashlight_scale = 3.2f;
+  i64                      nightcore_beat = -1;  // the last half beat played
 
   GamePhase                phase = GamePhase::Playing;
   f64                      phase_changed = 0;  // wall seconds
@@ -177,6 +198,7 @@ struct Results {
   f64              hit50_window = 0;
   std::string      player;
   std::string      replay_path;  // empty if the replay wasn't saved
+  Mods             mods = 0;
   f64              entered = 0;
   i32              hovered = -1;
 };
@@ -218,6 +240,10 @@ struct SongSelect {
   f32              drag_start_scroll = 0;
   f32              fling = 0;            // points per second
   i32              hovered_replay = -1;  // into the selected map's replays
+  // The mod select panel, over the list while open.
+  bool             mod_select = false;
+  f64              mod_select_changed = -1e9;  // wall seconds
+  i32              hovered_mod = -1;           // buttons numbered row by row
 };
 
 // Draws slider bodies; see slider.frag.
@@ -267,12 +293,13 @@ struct App {
 
   Screen                   screen = Screen::MainMenu;
   Screen                   next_screen = Screen::MainMenu;
-  f64 transition_started = -1;  // wall seconds; negative when none runs
+  f64  transition_started = -1;  // wall seconds; negative when none runs
 
   // Shared by the menu music, song select and gameplay.
-  i32 selected_map = -1;
+  i32  selected_map = -1;
+  Mods mods = 0;  // chosen in song select
   // ms; positive when sound reaches the player late.
-  f64 audio_offset = 0;
+  f64  audio_offset = 0;
   // Replays in replays/, and the one gameplay should play back next.
   std::vector<ReplayEntry> replays;
   std::string              replay_to_watch;
@@ -352,7 +379,12 @@ std::string fit_text(const Font&      font,
                      f32              max_width);
 std::string format_duration(f64 ms);  // m:ss
 Color difficulty_colour(const BeatmapInfo& info);
-Color grade_colour(Grade grade);
+// Hidden and Flashlight make SS and S grades silver, as in osu!.
+inline bool silver_grade(Grade grade, Mods mods) {
+  return (grade == Grade::SS || grade == Grade::S) &&
+         mods & (kHidden | kFlashlight);
+}
+Color grade_colour(Grade grade, Mods mods = 0);
 const char* grade_name(Grade grade);
 
 // menu.cc
@@ -370,6 +402,24 @@ void select_key(App& app, i32 key, i32 action);
 void select_char(App& app, u32 codepoint);
 void select_click(App& app, i32 button, i32 action);
 void select_scroll(App& app, f64 dy);
+
+// mod_select.cc
+void mod_select_update(App& app);
+void mod_select_draw(App& app);
+void mod_select_key(App& app, i32 key, i32 action);
+void mod_select_click(App& app, i32 button, i32 action);
+// The button's icon centred on (cx, cy): its skin image, or its acronym on
+// its group's colour. `state` is as mod_button_state gives it.
+void draw_mod_icon(App&             app,
+                   const ModButton& button,
+                   i32              state,
+                   f32              cx,
+                   f32              cy,
+                   f32              height,
+                   f32              alpha);
+// An icon for each of `mods` in a row; `x` is its left edge, centre or right
+// edge, per `align`. Returns the row's width.
+f32 draw_mod_icons(App& app, Mods mods, f32 x, f32 cy, f32 height, Align align);
 
 // gameplay.cc
 SliderRenderer create_slider_renderer();

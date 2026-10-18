@@ -181,7 +181,7 @@ constexpr f32 kReplayPanelTop = 292;
 
 // As many replays as fit above the footer.
 size_t visible_replays(const App& app, size_t count) {
-  const f32 room = app.height - 80 - kReplayPanelTop - 44;
+  const f32 room = app.height - 130 - kReplayPanelTop - 44;
   return std::min(count,
                   static_cast<size_t>(std::max(0.0f, room / kReplayRowHeight)));
 }
@@ -213,13 +213,15 @@ void draw_replays(App& app) {
     const Grade grade_ = grade(replay.counts);
     draw_text_shadowed(r, app.heavy, grade_name(grade_), row.x + 24,
                        centered_baseline(app.heavy, 24, row.y + row.h / 2), 24,
-                       grade_colour(grade_), Align::Center);
+                       grade_colour(grade_, replay.mods), Align::Center);
     draw_text(r, app.bold, fit_text(app.bold, replay.player, 16, row.w - 170),
               row.x + 52, row.y + 18, 16, kWhite);
-    char stats[96];
-    snprintf(stats, sizeof(stats), "%lld    %.2f%%    %dx",
+    char              stats[96];
+    const std::string mods = mod_acronyms(replay.mods);
+    snprintf(stats, sizeof(stats), "%lld    %.2f%%    %dx%s%s",
              static_cast<long long>(replay.score),
-             accuracy(replay.counts) * 100, replay.max_combo);
+             accuracy(replay.counts) * 100, replay.max_combo,
+             mods.empty() ? "" : "    +", mods.c_str());
     draw_text(r, app.regular, stats, row.x + 52, row.y + 36, 13,
               fade(kWhite, 0.75f));
     char       date[32];
@@ -228,6 +230,30 @@ void draw_replays(App& app) {
     draw_text(r, app.regular, date, row.x + row.w - 12, row.y + 18, 13,
               fade(kWhite, 0.55f), Align::Right);
   }
+}
+
+// The bottom-left button that opens mod select, showing the mods chosen.
+Rect mods_button(const App& app) {
+  return {24, app.height - 112, 150, 44};
+}
+
+bool over_mods_button(const App& app) {
+  const Rect b = mods_button(app);
+  return contains(app.cursor, b.x, b.y, b.w, b.h);
+}
+
+void open_mod_select(App& app) {
+  app.select.mod_select = true;
+  app.select.mod_select_changed = app.now;
+  app.select.hovered_mod = -1;
+  play_sound(app.audio, Sound::MenuClick, 0.6f);
+}
+
+void draw_mods_button(App& app) {
+  const Rect b = mods_button(app);
+  draw_button(app, b.x, b.y, b.w, b.h, "Mods", over_mods_button(app) ? 1 : 0,
+              hex_color(0x8844CC));
+  draw_mod_icons(app, app.mods, b.x + b.w + 16, b.y + b.h / 2, 34, Align::Left);
 }
 
 void draw_stat_bar(App&        app,
@@ -244,7 +270,7 @@ void draw_stat_bar(App&        app,
                     bar_w * clamp01(static_cast<f32>(value / 10)), 6, 3,
                     fade(kWhite, 0.85f));
   char text[16];
-  snprintf(text, sizeof(text), "%g", value);
+  snprintf(text, sizeof(text), "%.3g", value);
   draw_text(r, app.bold, text, x + width, y, 13, kWhite, Align::Right);
 }
 
@@ -271,24 +297,28 @@ void draw_info_panel(App& app) {
             line, 18, difficulty_colour(info));
   line += 26;
 
+  // As the chosen mods will play it.
+  const f64        rate = mod_rate(app.mods);
+  const Difficulty difficulty =
+      displayed_difficulty({info.cs, info.ar, info.od, info.hp}, app.mods);
   char bpm[32];
-  if (std::lround(info.bpm_min) == std::lround(info.bpm_max))
-    snprintf(bpm, sizeof(bpm), "%ld", std::lround(info.bpm_max));
+  if (std::lround(info.bpm_min * rate) == std::lround(info.bpm_max * rate))
+    snprintf(bpm, sizeof(bpm), "%ld", std::lround(info.bpm_max * rate));
   else
-    snprintf(bpm, sizeof(bpm), "%ld-%ld", std::lround(info.bpm_min),
-             std::lround(info.bpm_max));
+    snprintf(bpm, sizeof(bpm), "%ld-%ld", std::lround(info.bpm_min * rate),
+             std::lround(info.bpm_max * rate));
   char stats[160];
   snprintf(stats, sizeof(stats),
            "Length %s    BPM %s    Circles %d    Sliders %d    Spinners %d",
-           format_duration(info.end_time).c_str(), bpm, info.circles,
+           format_duration(info.end_time / rate).c_str(), bpm, info.circles,
            info.sliders, info.spinners);
   draw_text(r, app.regular, fit_text(app.regular, stats, 14, text_w), text_x,
             line, 14, fade(kWhite, 0.8f));
   line += 24;
-  draw_stat_bar(app, text_x, line, text_w, "CS", info.cs);
-  draw_stat_bar(app, text_x, line + 16, text_w, "AR", info.ar);
-  draw_stat_bar(app, text_x, line + 32, text_w, "OD", info.od);
-  draw_stat_bar(app, text_x, line + 48, text_w, "HP", info.hp);
+  draw_stat_bar(app, text_x, line, text_w, "CS", difficulty.cs);
+  draw_stat_bar(app, text_x, line + 16, text_w, "AR", difficulty.ar);
+  draw_stat_bar(app, text_x, line + 32, text_w, "OD", difficulty.od);
+  draw_stat_bar(app, text_x, line + 48, text_w, "HP", difficulty.hp);
 }
 
 // Sets are dark raised cards with a dot per difficulty, coloured by
@@ -412,7 +442,11 @@ void select_enter(App& app) {
 }
 
 void select_update(App& app) {
-  auto&      select = app.select;
+  auto& select = app.select;
+  if (select.mod_select) {
+    mod_select_update(app);
+    return;
+  }
   const auto rows = build_rows(app);
   const f32  limit = scroll_limit(rows);
   if (select.right_down) {
@@ -513,16 +547,26 @@ void select_draw(App& app) {
           app.regular,
           "Enter  play      Esc  back      Left / Right  set      "
           "Up / Down  difficulty      Drag, or right-click empty space  scroll"
-          "      F2  random      Type  search",
+          "      F1  mods      F2  random      Type  search",
           14, app.width - 40),
       app.width / 2, app.height - 22, 14, fade(kWhite, 0.75f), Align::Center);
+  draw_mods_button(app);
+  if (select.mod_select)
+    mod_select_draw(app);
 }
 
 void select_key(App& app, i32 key, i32 action) {
   if (action == GLFW_RELEASE)
     return;
   auto& select = app.select;
+  if (select.mod_select) {
+    mod_select_key(app, key, action);
+    return;
+  }
   switch (key) {
+    case GLFW_KEY_F1:
+      open_mod_select(app);
+      break;
     case GLFW_KEY_UP:
       move_difficulty(app, -1);
       break;
@@ -567,7 +611,8 @@ void select_key(App& app, i32 key, i32 action) {
 }
 
 void select_char(App& app, u32 codepoint) {
-  if (codepoint < ' ' || codepoint > '~')
+  // Mod select takes letters as its shortcuts.
+  if (app.select.mod_select || codepoint < ' ' || codepoint > '~')
     return;
   app.select.query.push_back(static_cast<char>(codepoint));
   apply_filter(app);
@@ -575,6 +620,15 @@ void select_char(App& app, u32 codepoint) {
 
 void select_click(App& app, i32 button, i32 action) {
   auto& select = app.select;
+  if (select.mod_select) {
+    mod_select_click(app, button, action);
+    return;
+  }
+  if (button == GLFW_MOUSE_BUTTON_LEFT && action == GLFW_PRESS &&
+      over_mods_button(app)) {
+    open_mod_select(app);
+    return;
+  }
   // Holding the right button on empty space jumps through the list, as in
   // osu!, which keeps right-clicks on a row for its beatmap options.
   if (button == GLFW_MOUSE_BUTTON_RIGHT) {
@@ -618,6 +672,8 @@ void select_click(App& app, i32 button, i32 action) {
 
 void select_scroll(App& app, f64 dy) {
   auto& select = app.select;
+  if (select.mod_select)
+    return;
   select.fling = 0;
   select.scroll_target =
       std::clamp(select.scroll_target - static_cast<f32>(dy) * kWheelStep, 0.0f,

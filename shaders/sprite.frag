@@ -15,6 +15,7 @@ const int KIND_GLYPH = 2;
 const int KIND_CIRCLE = 3;
 const int KIND_ROUNDED_RECT = 4;
 const int KIND_ARC = 5;
+const int KIND_SPOTLIGHT = 6;
 
 const float TAU = 6.28318531;
 // Glyph atlases store 128/255 exactly on the outline (kSdfOnEdge in gfx.cc);
@@ -62,6 +63,10 @@ void main() {
       }
       alpha *= coverage((turn - v_params.z) * TAU * r, pixel);
     }
+  } else if (kind == KIND_SPOTLIGHT) {
+    // v_uv spans [-1, 1] across the square. Parameters: the hole's radius and
+    // its edge's width, as fractions of the half width.
+    alpha = smoothstep(v_params.y, v_params.y + v_params.z, length(v_uv));
   } else if (kind == KIND_ROUNDED_RECT) {
     // v_uv is the offset from the centre in points. Parameters: half width,
     // half height, corner radius.

@@ -172,11 +172,14 @@ void results_draw(App& app) {
     constexpr const char* kGradeImages[] = {"ranking-x", "ranking-s",
                                             "ranking-a", "ranking-b",
                                             "ranking-c", "ranking-d"};
-    const Color           colour = grade_colour(grade_);
-    const f32             overshoot = 1 + 0.6f * (1 - ease_out(land));
-    const f32             cx = app.width * 0.74f, cy = app.height * 0.46f;
-    if (const auto* image =
-            skin_element(app.skin, kGradeImages[static_cast<i32>(grade_)])) {
+    const bool            silver = silver_grade(grade_, results.mods);
+    const char*           image_name =
+        silver ? (grade_ == Grade::SS ? "ranking-xh" : "ranking-sh")
+               : kGradeImages[static_cast<i32>(grade_)];
+    const Color colour = grade_colour(grade_, results.mods);
+    const f32   overshoot = 1 + 0.6f * (1 - ease_out(land));
+    const f32   cx = app.width * 0.74f, cy = app.height * 0.46f;
+    if (const auto* image = skin_element(app.skin, image_name)) {
       draw_skin_image(r, image->front(), cx, cy, ui_scale(app) * overshoot,
                       fade(kWhite, land));
     } else {
@@ -187,6 +190,8 @@ void results_draw(App& app) {
                          centered_baseline(app.heavy, size, cy), size,
                          fade(colour, land), Align::Center);
     }
+    draw_mod_icons(app, results.mods, cx, cy + app.height * 0.3f, 40,
+                   Align::Center);
   }
 
   const char* labels[] = {"RETRY", "WATCH", "BACK"};

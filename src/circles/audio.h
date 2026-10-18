@@ -1,10 +1,12 @@
 #pragma once
 
 #include <circles/hitsounds.h>
+#include <circles/stretch.h>
 #include <circles/types.h>
 
 #include <atomic>
 #include <functional>
+#include <memory>
 #include <miniaudio.h>
 #include <string>
 #include <vector>
@@ -33,6 +35,11 @@ enum class Sound : u8 {
   MenuHover,
   MenuClick,
   SpinnerBonus,
+  // Nightcore's drum track.
+  NightcoreKick,
+  NightcoreClap,
+  NightcoreHat,
+  NightcoreFinish,
   Count,
 };
 
@@ -68,20 +75,34 @@ struct SoundBank {
   bool                 loaded = false;
 };
 
+// The music as its sound plays it: the decoded stream, through a time
+// stretcher while its tempo isn't 1. The audio thread reads it.
+struct MusicSource {
+  ma_data_source_base             base;  // first, as miniaudio requires
+  ma_resource_manager_data_source stream;
+  std::unique_ptr<TimeStretcher>  stretcher;
+  std::atomic<f64>                requested_tempo{1};
+  f64                             tempo = 1;
+  std::atomic<u64>                cursor{0};  // the stream frame playing
+};
+
 // The output device, music stream and effects. Neither copyable nor movable:
 // miniaudio keeps pointers into it.
 struct Audio {
   // False when no output device opened; every call is then a no-op.
-  bool        ready = false;
-  ma_engine   engine;
-  ma_device   device;
-  ma_sound    music;
-  bool        music_loaded = false;
-  std::string music_path;
-  f32         music_volume = 0.7f;
-  f32         effects_volume = 0.6f;
-  f32         master_volume = 1;  // scales everything; the player's setting
-  SoundBank   sounds[static_cast<i32>(Sound::Count)];
+  bool                         ready = false;
+  ma_engine                    engine;
+  ma_device                    device;
+  ma_sound                     music;
+  std::unique_ptr<MusicSource> music_source;
+  bool                         music_loaded = false;
+  std::string                  music_path;
+  f64                          music_rate = 1;
+  bool                         music_keep_pitch = true;
+  f32                          music_volume = 0.7f;
+  f32                          effects_volume = 0.6f;
+  f32       master_volume = 1;  // scales everything; the player's setting
+  SoundBank sounds[static_cast<i32>(Sound::Count)];
 
   // A mono copy of the latest output for the visualizer, written by the audio
   // thread.
@@ -107,8 +128,12 @@ void music_pause(Audio& audio);
 bool music_playing(const Audio& audio);
 bool music_at_end(const Audio& audio);
 void music_seek(Audio& audio, f64 ms);
-f64 music_position(const Audio& audio);         // ms
-void music_set_speed(Audio& audio, f32 speed);  // also changes pitch
+f64 music_position(const Audio& audio);  // ms
+// Plays the music `rate` times as fast, from now on and for later tracks;
+// without `keep_pitch` the pitch rises and falls with it.
+void music_set_rate(Audio& audio, f64 rate, bool keep_pitch);
+// Speeds up or slows the music on top of its rate, changing its pitch too.
+void music_set_speed(Audio& audio, f32 speed);
 void music_fade_in(Audio& audio, f32 ms);
 
 // 0 to 1; values outside are clamped.

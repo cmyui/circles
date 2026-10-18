@@ -38,10 +38,13 @@ add_library(circles_core STATIC
   src/circles/library.cc
   src/circles/md5.cc
   src/circles/menu.cc
+  src/circles/mod_select.cc
+  src/circles/mods.cc
   src/circles/replay.cc
   src/circles/results.cc
   src/circles/skin.cc
   src/circles/song_select.cc
+  src/circles/stretch.cc
 )
 target_include_directories(circles_core PUBLIC src)
 target_compile_definitions(circles_core PUBLIC GL_SILENCE_DEPRECATION)
@@ -54,7 +57,7 @@ target_compile_options(circles PRIVATE -Wall -Wextra)
 target_link_libraries(circles PRIVATE circles_core)
 
 if(BUILD_TESTING)
-  set(_tests rules archive skin hitsounds md5 replay)
+  set(_tests rules archive skin hitsounds md5 replay stretch mods)
   set(_test_targets)
   foreach(name IN LISTS _tests)
     list(APPEND _test_targets test_${name})

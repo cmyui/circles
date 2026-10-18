@@ -109,17 +109,20 @@ inline i32 judgement_value(Judgement judgement) {
 }
 
 // osu!stable's score multiplier from the map's settings and object density.
+// It rounds halves to even, as .NET does.
 inline f64 difficulty_multiplier(f64    hp,
                                  f64    cs,
                                  f64    od,
                                  size_t objects,
-                                 f64    drain_seconds) {
-  const f64 density = objects / std::max(1.0, drain_seconds);
-  return std::round((hp + cs + od + std::clamp(density * 8, 0.0, 16.0)) / 38 *
-                    5);
+                                 i32    drain_seconds) {
+  const f64 density =
+      drain_seconds > 0 ? static_cast<f64>(objects) / drain_seconds : 1e9;
+  return std::nearbyint((hp + cs + od + std::clamp(density * 8, 0.0, 16.0)) /
+                        38 * 5);
 }
 
-// Score for a judgement, growing with the combo it was hit on.
+// Score for a judgement, growing with the combo before it, as osu!stable
+// counts.
 inline i64 hit_score(Judgement judgement, i32 combo, f64 multiplier) {
   const i32 value = judgement_value(judgement);
   return value +

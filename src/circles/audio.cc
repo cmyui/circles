@@ -41,6 +41,10 @@ enum class Synth : u8 {
   MenuHover,
   MenuClick,
   SpinnerBonus,
+  Kick,
+  Clap,
+  Hat,
+  Crash,
 };
 
 constexpr i32 kHitsoundKinds = static_cast<i32>(HitsoundKind::Count);
@@ -140,12 +144,49 @@ std::vector<f32> synthesize(Synth sound) {
                 0.25f * std::sin(kTau * 3136 * t));
       });
       break;
+    case Synth::Kick:
+      // A sine dropping from a punchy click to a low boom.
+      pcm = render(0.35f, [&](f32 t) {
+        phase += kTau * (48 + 140 * std::exp(-t * 30)) / rate;
+        return std::sin(phase) * std::exp(-t * 9) * std::min(1.0f, t * 2000);
+      });
+      break;
+    case Synth::Clap:
+      pcm = render(0.25f, [&](f32 t) {
+        const f32 n = noise();
+        lowpass += 0.4f * (n - lowpass);
+        f32 envelope = 0.4f * std::exp(-t * 18);
+        for (f32 start : {0.0f, 0.009f, 0.018f})
+          if (t >= start)
+            envelope = std::max(envelope, std::exp(-(t - start) * 260));
+        return (n - lowpass) * envelope;
+      });
+      break;
+    case Synth::Hat:
+      pcm = render(0.06f, [&](f32 t) {
+        const f32 n = noise();
+        const f32 high = n - previous;
+        previous = n;
+        return high * std::exp(-t * 80);
+      });
+      break;
+    case Synth::Crash:
+      pcm = render(1.4f, [&](f32 t) {
+        const f32 n = noise();
+        const f32 high = n - previous;
+        previous = n;
+        return high * std::exp(-t * 3) * std::min(1.0f, t * 1000);
+      });
+      break;
   }
 
-  // Additions and ticks sit under the main hit sound.
+  // Additions, ticks and the drum track sit under the main hit sound.
   const f32 loudness = sound == Synth::HitWhistle   ? 0.56f
                        : sound == Synth::HitClap    ? 0.64f
                        : sound == Synth::SliderTick ? 0.48f
+                       : sound == Synth::Hat        ? 0.3f
+                       : sound == Synth::Crash      ? 0.4f
+                       : sound >= Synth::Kick       ? 0.6f
                                                     : 0.8f;
   f32       peak = 1e-6f;
   for (f32 s : pcm)
@@ -198,11 +239,114 @@ void load_bank(Audio& audio, SoundBank& bank, std::vector<f32> pcm) {
   bank.loaded = true;
 }
 
+// ---- Music ----
+
+MusicSource& music_source(ma_data_source* source) {
+  return *reinterpret_cast<MusicSource*>(source);
+}
+
+// Starts stretching afresh from `frame` at the requested tempo.
+void restart_music(MusicSource& music, u64 frame) {
+  music.tempo = music.requested_tempo.load(std::memory_order_relaxed);
+  music.stretcher->reset(frame);
+  music.stretcher->set_tempo(music.tempo);
+  music.cursor.store(frame, std::memory_order_relaxed);
+}
+
+ma_result read_music(ma_data_source* source,
+                     void*           out,
+                     ma_uint64       frame_count,
+                     ma_uint64*      frames_read) {
+  auto& music = music_source(source);
+  if (music.requested_tempo.load(std::memory_order_relaxed) != music.tempo) {
+    const u64 frame = music.cursor.load(std::memory_order_relaxed);
+    ma_data_source_seek_to_pcm_frame(&music.stream, frame);
+    restart_music(music, frame);
+  }
+  if (music.tempo == 1) {
+    const ma_result result = ma_data_source_read_pcm_frames(
+        &music.stream, out, frame_count, frames_read);
+    ma_uint64 cursor = 0;
+    ma_data_source_get_cursor_in_pcm_frames(&music.stream, &cursor);
+    music.cursor.store(cursor, std::memory_order_relaxed);
+    return result;
+  }
+
+  ma_uint32 channels = 0;
+  ma_data_source_get_data_format(&music.stream, nullptr, &channels, nullptr,
+                                 nullptr, 0);
+  // Reading without an output buffer skips ahead.
+  std::vector<f32> discard;
+  if (!out)
+    discard.resize(frame_count * channels);
+  const u64 count = music.stretcher->process(
+      out ? static_cast<f32*>(out) : discard.data(), frame_count,
+      [&](f32* input, u64 frames, bool& ended) {
+        ma_uint64       got = 0;
+        const ma_result result =
+            ma_data_source_read_pcm_frames(&music.stream, input, frames, &got);
+        ended = result == MA_AT_END;
+        return static_cast<u64>(got);
+      });
+  *frames_read = count;
+  music.cursor.store(std::llround(music.stretcher->input_position()),
+                     std::memory_order_relaxed);
+  if (count > 0)
+    return MA_SUCCESS;
+  return music.stretcher->finished() ? MA_AT_END : MA_BUSY;
+}
+
+ma_result seek_music(ma_data_source* source, ma_uint64 frame) {
+  auto&           music = music_source(source);
+  const ma_result result =
+      ma_data_source_seek_to_pcm_frame(&music.stream, frame);
+  restart_music(music, frame);
+  return result;
+}
+
+ma_result music_format(ma_data_source* source,
+                       ma_format*      format,
+                       ma_uint32*      channels,
+                       ma_uint32*      sample_rate,
+                       ma_channel*     channel_map,
+                       size_t          channel_map_capacity) {
+  return ma_data_source_get_data_format(&music_source(source).stream, format,
+                                        channels, sample_rate, channel_map,
+                                        channel_map_capacity);
+}
+
+ma_result music_cursor(ma_data_source* source, ma_uint64* cursor) {
+  *cursor = music_source(source).cursor.load(std::memory_order_relaxed);
+  return MA_SUCCESS;
+}
+
+ma_result music_length(ma_data_source* source, ma_uint64* length) {
+  return ma_data_source_get_length_in_pcm_frames(&music_source(source).stream,
+                                                 length);
+}
+
+ma_data_source_vtable kMusicVtable = {
+    read_music, seek_music, music_format, music_cursor, music_length,
+    nullptr,    0};
+
 void music_unload(Audio& audio) {
-  if (audio.music_loaded)
+  if (audio.music_loaded) {
     ma_sound_uninit(&audio.music);
+    ma_data_source_uninit(&audio.music_source->base);
+    ma_resource_manager_data_source_uninit(&audio.music_source->stream);
+    audio.music_source.reset();
+  }
   audio.music_loaded = false;
   audio.music_path.clear();
+}
+
+// Applies the rate and an extra speed factor to the loaded track.
+void apply_music_rate(Audio& audio, f32 speed) {
+  audio.music_source->requested_tempo.store(
+      audio.music_keep_pitch ? audio.music_rate : 1, std::memory_order_relaxed);
+  ma_sound_set_pitch(
+      &audio.music,
+      static_cast<f32>(audio.music_keep_pitch ? 1 : audio.music_rate) * speed);
 }
 
 ma_uint32 music_sample_rate(const Audio& audio) {
@@ -287,9 +431,10 @@ std::string sound_file_stem(Sound sound) {
   constexpr const char* kSets[] = {"normal", "soft", "drum"};
   constexpr const char* kKinds[] = {"hitnormal", "hitwhistle", "hitfinish",
                                     "hitclap", "slidertick"};
-  constexpr const char* kOthers[] = {"combobreak", "click-short", "menuclick",
-                                     "spinnerbonus"};
-  const i32             index = static_cast<i32>(sound);
+  constexpr const char* kOthers[] = {
+      "combobreak",     "click-short",    "menuclick",     "spinnerbonus",
+      "nightcore-kick", "nightcore-clap", "nightcore-hat", "nightcore-finish"};
+  const i32 index = static_cast<i32>(sound);
   if (index < kHitsoundEffects)
     return std::string(kSets[index / kHitsoundKinds]) + '-' +
            kKinds[index % kHitsoundKinds];
@@ -319,16 +464,34 @@ bool music_load(Audio& audio, const std::string& path) {
     return true;
   music_unload(audio);
   // Streaming decodes as it plays, so long songs start instantly.
-  if (ma_sound_init_from_file(
-          &audio.engine, path.c_str(),
-          MA_SOUND_FLAG_STREAM | MA_SOUND_FLAG_NO_SPATIALIZATION, nullptr,
-          nullptr, &audio.music) != MA_SUCCESS) {
+  auto source = std::make_unique<MusicSource>();
+  if (ma_resource_manager_data_source_init(
+          ma_engine_get_resource_manager(&audio.engine), path.c_str(),
+          MA_RESOURCE_MANAGER_DATA_SOURCE_FLAG_STREAM, nullptr,
+          &source->stream) != MA_SUCCESS) {
     fprintf(stderr, "audio: can't open %s\n", path.c_str());
     return false;
   }
+  ma_uint32 channels = 0, sample_rate = 0;
+  ma_data_source_get_data_format(&source->stream, nullptr, &channels,
+                                 &sample_rate, nullptr, 0);
+  source->stretcher = std::make_unique<TimeStretcher>(channels, sample_rate);
+  ma_data_source_config config = ma_data_source_config_init();
+  config.vtable = &kMusicVtable;
+  ma_data_source_init(&config, &source->base);
+  if (ma_sound_init_from_data_source(&audio.engine, &source->base,
+                                     MA_SOUND_FLAG_NO_SPATIALIZATION, nullptr,
+                                     &audio.music) != MA_SUCCESS) {
+    ma_data_source_uninit(&source->base);
+    ma_resource_manager_data_source_uninit(&source->stream);
+    fprintf(stderr, "audio: can't play %s\n", path.c_str());
+    return false;
+  }
+  audio.music_source = std::move(source);
   audio.music_loaded = true;
   audio.music_path = path;
   ma_sound_set_volume(&audio.music, audio.music_volume);
+  apply_music_rate(audio, 1);
   return true;
 }
 
@@ -365,9 +528,16 @@ f64 music_position(const Audio& audio) {
   return cursor * 1000.0 / music_sample_rate(audio);
 }
 
+void music_set_rate(Audio& audio, f64 rate, bool keep_pitch) {
+  audio.music_rate = rate;
+  audio.music_keep_pitch = keep_pitch;
+  if (audio.music_loaded)
+    apply_music_rate(audio, 1);
+}
+
 void music_set_speed(Audio& audio, f32 speed) {
   if (audio.music_loaded)
-    ma_sound_set_pitch(&audio.music, speed);
+    apply_music_rate(audio, speed);
 }
 
 void set_master_volume(Audio& audio, f32 volume) {

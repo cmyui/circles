@@ -157,6 +157,14 @@ void draw_circle(Renderer& r,
                  Color     color,
                  f32       inner = 0,
                  f32       softness = 0);
+// Covers the window except a hole of `radius` around (cx, cy), its edge
+// fading over `softness` points.
+void draw_spotlight(Renderer& r,
+                    f32       cx,
+                    f32       cy,
+                    f32       radius,
+                    f32       softness,
+                    Color     color);
 void draw_circle_gradient(Renderer& r,
                           f32       cx,
                           f32       cy,

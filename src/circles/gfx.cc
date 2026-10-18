@@ -74,6 +74,7 @@ enum Kind : i32 {
   kKindCircle,
   kKindRoundedRect,
   kKindArc,
+  kKindSpotlight,
 };
 
 // Per vertex: position (2), texture or shape-local coordinates (2), colour
@@ -443,6 +444,22 @@ void draw_circle(Renderer& r,
                  f32       softness) {
   circle_quad(r, cx, cy, radius, color, color,
               {kKindCircle, inner, softness, 0});
+}
+
+void draw_spotlight(Renderer& r,
+                    f32       cx,
+                    f32       cy,
+                    f32       radius,
+                    f32       softness,
+                    Color     color) {
+  // A square reaching every corner of the window, with the hole in its
+  // middle.
+  const f32 cover =
+      std::max({std::hypot(cx, cy), std::hypot(r.width - cx, cy),
+                std::hypot(cx, r.height - cy),
+                std::hypot(r.width - cx, r.height - cy), radius + softness});
+  circle_quad(r, cx, cy, cover, color, color,
+              {kKindSpotlight, radius / cover, softness / cover, 0});
 }
 
 void draw_circle_gradient(Renderer& r,

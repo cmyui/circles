@@ -41,6 +41,33 @@ their beatmap is in `beatmaps/`: a replay names its beatmap by the MD5 hash of
 the `.osu` file, so it needs that exact version. Space skips a replay's intro
 and Esc pauses it.
 
+## Mods
+
+F1, or the Mods button in song select, opens mod select. It has osu!stable's
+osu!standard mods except Target Practice, with stable's keys, exclusions and
+score multipliers:
+
+| Key | Mod | Effect |
+|---|---|---|
+| Q | Easy | Halves circle size, approach rate, accuracy and HP settings; revives you twice |
+| W | No Fail | You can't fail |
+| E | Half Time | 0.75x speed, same pitch |
+| A | Hard Rock | Raises the settings (circle size 1.3x, others 1.4x) and flips the playfield vertically |
+| S | Sudden Death, then Perfect | Fail at the first miss or slider break; Perfect restarts on anything but a 300 |
+| D | Double Time, then Nightcore | 1.5x speed; Nightcore raises the pitch and adds a drum track |
+| F | Hidden | Circles fade out before you hit them; no approach circles after the first |
+| G | Flashlight | Only the area around the cursor is visible, shrinking at 100 and 200 combo |
+| Z | Relax | Circles hit themselves when the cursor is on them; you aim |
+| X | Autopilot | The cursor moves itself; you tap |
+| C | Spun Out | Spinners spin themselves |
+| V | Auto, then Cinema | Watch a perfect play; Cinema shows only the background |
+| B | Score V2 | osu!'s newer scoring, out of 1,000,000 |
+
+Pressing a key again steps a two-mod button to its second mod, then off; 1
+resets. The song select preview plays at the chosen speed, and the stats show
+the settings as the mods make them feel. Replays save their mods and play back
+with them. Hidden and Flashlight make S and SS grades silver.
+
 ## Controls
 
 | Key | Action |
@@ -54,6 +81,7 @@ and Esc pauses it.
 | F9 | Next skin (outside gameplay) |
 | F10 | Mouse buttons on or off for hitting, saved in `settings.txt` |
 | F11 | Fullscreen |
+| F1 | Mod select (song select) |
 
 In song select, type to search, use the arrow keys to choose, Enter to play
 and F2 for a random song.
@@ -63,7 +91,7 @@ and F2 for a random song.
 - Without a skin, hitsounds are synthesized. Beatmaps' own hitsound samples,
   storyboards and videos are ignored.
 - Skins don't restyle the menus, song select, pause screen or input overlay.
-- No mods. Replays play back without their mods: a Double Time replay plays at
-  normal speed, Hidden objects stay visible.
+- Spinners count full turns, as osu!lazer does, rather than osu!stable's half
+  turns, so spinner scores differ slightly from stable's.
 - Scoring follows osu!stable's score formula; health is a simplified version
   of osu!'s.

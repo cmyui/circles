@@ -39,6 +39,7 @@ struct Settings {
   f32         volume = 1;
   std::string skin;  // folder name in skins/; empty for the built-in look
   bool        mouse_buttons = true;
+  Mods        mods = 0;
 };
 
 Settings load_settings() {
@@ -59,6 +60,8 @@ Settings load_settings() {
       settings.skin = value;
     else if (key == "mouse_buttons")
       settings.mouse_buttons = std::strtol(value, nullptr, 10) != 0;
+    else if (key == "mods")
+      settings.mods = static_cast<Mods>(std::strtoul(value, nullptr, 10));
   }
   return settings;
 }
@@ -231,8 +234,12 @@ void draw_cursor(App& app) {
     for (bool held : game.held)
       pressed |= held;
   // A replay being watched shows its cursor, until a pause needs the mouse.
-  const bool  replay = app.screen == Screen::Gameplay && game.watching &&
-                       game.phase == GamePhase::Playing;
+  // Autopilot's cursor moves by itself; Cinema shows none.
+  const bool replay = app.screen == Screen::Gameplay &&
+                      (game.watching || game.mods & kAutopilot) &&
+                      game.phase == GamePhase::Playing;
+  if (replay && game.mods & kCinema)
+    return;
   const Vec2  position = replay ? game.cursor : app.cursor;
   const auto& trail = replay ? game.replay_trail : app.trail;
   if (const auto* cursor = skin_element(app.skin, "cursor")) {
@@ -316,6 +323,7 @@ bool app_init(App& app) {
   const Settings settings = load_settings();
   app.audio_offset = settings.audio_offset;
   app.mouse_buttons = settings.mouse_buttons;
+  app.mods = settings.mods;
   set_master_volume(app.audio, settings.volume);
   const i32 imported =
       static_cast<i32>(import_archives(kBeatmapDirectory, ".osz").size());
@@ -540,6 +548,7 @@ void play_preview(App& app) {
   const auto& info = app.library.maps[app.selected_map];
   if (!music_load(app.audio, info.audio_path))
     return;
+  music_set_rate(app.audio, mod_rate(app.mods), !mods_change_pitch(app.mods));
   music_set_speed(app.audio, 1);
   music_seek(app.audio,
              info.preview_time >= 0 ? info.preview_time : info.end_time * 0.4);
@@ -577,6 +586,7 @@ void save_settings(const App& app) {
   file << "skin=" << (app.skin_index >= 0 ? app.skins[app.skin_index] : "")
        << '\n';
   file << "mouse_buttons=" << app.mouse_buttons << '\n';
+  file << "mods=" << app.mods << '\n';
 }
 
 std::string save_replay(App& app, i32 map, Replay replay) {
@@ -694,11 +704,12 @@ Color difficulty_colour(const BeatmapInfo& info) {
   return colours[4];
 }
 
-Color grade_colour(Grade grade) {
+Color grade_colour(Grade grade, Mods mods) {
   switch (grade) {
     case Grade::SS:
     case Grade::S:
-      return hex_color(0xFFD452);
+      return silver_grade(grade, mods) ? hex_color(0xDDE3EE)
+                                       : hex_color(0xFFD452);
     case Grade::A:
       return hex_color(0x88DA20);
     case Grade::B:
