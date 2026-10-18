@@ -639,6 +639,31 @@ void finish(App& app) {
 
 // ---- Drawing ----
 
+// A watched play's timeline, along the window's bottom edge, under the hit
+// error meter.
+struct Timeline {
+  f32 x, y, w;
+};
+
+Timeline timeline(const App& app) {
+  return {0, app.height - 3, app.width};
+}
+
+bool over_timeline(const App& app) {
+  return app.cursor.y >= app.height - 20;
+}
+
+f64 timeline_time(const App& app) {
+  const Timeline t = timeline(app);
+  const f64      fraction = clamp01((app.cursor.x - t.x) / t.w);
+  return app.game.timeline_start +
+         fraction * (app.game.end_time - app.game.timeline_start);
+}
+
+bool can_scrub(const Gameplay& game) {
+  return game.watching && game.phase == GamePhase::Playing;
+}
+
 // A press note lock blocked shakes its object 8 pixels side to side for
 // 120 ms, as stable does.
 f32 shake_offset(const App& app, const ObjectState& state) {
@@ -1553,6 +1578,45 @@ void draw_flashlight(App& app, const Playfield& field) {
                  35 * texel, 18 * texel, kBlack);
 }
 
+// A watched play's timeline, which a click or drag moves along, and the
+// player's own pointer for it: the cursor drawn is the replay's.
+void draw_timeline(App& app) {
+  const auto& game = app.game;
+  if (!can_scrub(game))
+    return;
+  auto&          r = app.renderer;
+  const Timeline t = timeline(app);
+  const bool     active = game.scrubbing || over_timeline(app);
+  const f32      moved =
+      1 - clamp01(static_cast<f32>((app.now - app.cursor_moved - 1.5) / 0.5));
+  const f32 shown = std::max(active ? 1.0f : 0.0f, moved);
+  const f32 alpha = 0.3f + 0.7f * shown;
+  const f32 progress = clamp01(
+      static_cast<f32>((game.time - game.timeline_start) /
+                       std::max(1.0, game.end_time - game.timeline_start)));
+  const f32 thickness = active ? 6 : 3;
+  draw_rect(r, t.x, app.height - thickness, t.w, thickness,
+            fade(kWhite, 0.25f * alpha));
+  draw_rect(r, t.x, app.height - thickness, t.w * progress, thickness,
+            fade(kWhite, 0.8f * alpha));
+  if (active)
+    draw_circle(r, t.x + t.w * progress, app.height - thickness / 2, 7, kWhite);
+  const auto clock = [](f64 ms) {
+    const i32 seconds = static_cast<i32>(std::max(0.0, ms) / 1000);
+    char      text[16];
+    snprintf(text, sizeof(text), "%d:%02d", seconds / 60, seconds % 60);
+    return std::string(text);
+  };
+  draw_text_shadowed(r, app.regular,
+                     clock(game.time) + " / " + clock(game.end_time), 10,
+                     app.height - 12, 13, fade(kWhite, alpha));
+  if (shown > 0) {
+    draw_circle(r, app.cursor.x, app.cursor.y, 8, fade(kWhite, 0.9f * shown),
+                0.65f);
+    draw_circle(r, app.cursor.x, app.cursor.y, 2, fade(kWhite, 0.9f * shown));
+  }
+}
+
 void draw_game_overlays(App& app) {
   auto&       r = app.renderer;
   const auto& game = app.game;
@@ -1865,7 +1929,49 @@ bool load_gameplay(App&        app,
     game.autopilot_frames = autoplay_frames(game);
   }
   game.cursor = game.flashlight_position = app.cursor;
+  game.timeline_start = game.time;
   return true;
+}
+
+// Shows a watched play at game time `target`: rebuilt from its start for an
+// earlier time, judged silently up to it either way, with the music moved to
+// match.
+void seek(App& app, f64 target) {
+  auto&     game = app.game;
+  const i32 time =
+      static_cast<i32>(std::clamp(target, game.timeline_start, game.end_time));
+  if (time < game.time) {
+    const f64 started = game.started;
+    if (!load_gameplay(app, game.map_index, game.replay_path, true))
+      return;
+    game.started = started;
+    game.dim = app.background_dim;
+  }
+  app.audio.effects_muted = true;
+  StepOutcome outcome = StepOutcome::Continue;
+  do
+    outcome = step_replay(app, time);
+  while (outcome == StepOutcome::Recover);
+  app.audio.effects_muted = false;
+  game.time = time;
+  game.clock_time = time + song_offset(app);
+  game.clock_synced = app.now;
+  game.last_seek = app.now;
+  game.popups.clear();
+  game.recent_errors.clear();
+  game.replay_trail.clear();
+  game.displayed_score = static_cast<f64>(game.score);
+  game.displayed_health = static_cast<f32>(game.health / kHealthMax);
+  if (game.audio_ok) {
+    game.audio_started = game.clock_time >= 0;
+    music_seek(app.audio, std::max(0.0, game.clock_time));
+    if (game.audio_started)
+      music_play(app.audio);
+    else
+      music_pause(app.audio);
+  }
+  if (outcome == StepOutcome::Fail)
+    fail(app);
 }
 
 }  // namespace
@@ -1928,6 +2034,13 @@ void gameplay_update(App& app) {
     if (game.recovery_display > game.health - 5)
       resume(app);
     return;
+  }
+
+  // Dragging along the timeline seeks as it goes, up to 20 times a second.
+  if (game.scrubbing && app.now - game.last_seek >= 0.05) {
+    const f64 target = timeline_time(app);
+    if (std::abs(target - game.time) >= 1)
+      seek(app, target);
   }
 
   advance_clock(app);
@@ -2036,6 +2149,7 @@ void gameplay_draw(App& app) {
   // Cinema shows only the background, undimmed.
   if (game.mods & kCinema) {
     draw_backdrop(app, 0, 0);
+    draw_timeline(app);
     draw_game_overlays(app);
     return;
   }
@@ -2077,6 +2191,7 @@ void gameplay_draw(App& app) {
   if (game.mods & kFlashlight)
     draw_flashlight(app, field);
   draw_hud(app);
+  draw_timeline(app);
   draw_game_overlays(app);
 }
 
@@ -2108,6 +2223,11 @@ void gameplay_key(App& app, i32 key, i32 action, f64 wall) {
                game.phase == GamePhase::Paused) {
       resume(app);
     }
+    return;
+  }
+  // A watched play skips back and forth 5 seconds, repeating while held.
+  if ((key == GLFW_KEY_LEFT || key == GLFW_KEY_RIGHT) && can_scrub(game)) {
+    seek(app, game.time + (key == GLFW_KEY_RIGHT ? 5000 : -5000));
     return;
   }
   if (action != GLFW_PRESS)
@@ -2144,6 +2264,15 @@ void gameplay_click(App& app, i32 button, i32 action, f64 wall) {
     game.held[hit_key] = action == GLFW_PRESS;
     if (game.phase == GamePhase::Playing)
       game.pending_keys.push_back({wall, replay_keys(game)});
+  }
+  if (button == GLFW_MOUSE_BUTTON_LEFT && game.watching) {
+    if (action == GLFW_RELEASE && game.scrubbing) {
+      game.scrubbing = false;
+      seek(app, timeline_time(app));
+    } else if (action == GLFW_PRESS && can_scrub(game) && over_timeline(app)) {
+      game.scrubbing = true;
+      seek(app, timeline_time(app));
+    }
   }
   const bool menu =
       game.phase == GamePhase::Paused || game.phase == GamePhase::Failed;

@@ -23,6 +23,7 @@
 #include <future>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -185,7 +186,12 @@ struct Gameplay {
   // its frames back instead of taking input.
   std::vector<ReplayFrame> frames;
   bool                     watching = false;
-  std::string              replay_path;  // the replay being watched
+  // Scrubbing a watched play: where its timeline starts (game ms), and a
+  // drag along it.
+  f64                      timeline_start = 0;
+  bool                     scrubbing = false;
+  f64                      last_seek = -1e9;  // wall seconds
+  std::string              replay_path;       // the replay being watched
   std::string              replay_player;
   size_t                   next_frame = 0;   // watching: the next to apply
   f64                      replay_tick = 0;  // watching: the next 60 Hz frame
@@ -348,6 +354,7 @@ struct App {
   Results                results;
 
   Vec2                   cursor{};
+  f64                    cursor_moved = -1e9;  // wall seconds
   std::deque<TrailPoint> trail;
   std::vector<Vec2>      scratch;  // a slider body's points this frame
   bool                   fullscreen = false;
@@ -376,9 +383,9 @@ void app_drop(App& app, std::span<const char* const> paths);
 
 // Fades out, switches, and fades back in.
 void switch_screen(App& app, Screen screen);
-// Watches `replay_path` silently while profiling. False if it or its map
-// can't be found.
-bool app_start_benchmark(App& app, const std::string& replay_path);
+// Watches `path` silently while profiling: a replay, or Auto playing a .osu.
+// False if it or its map can't be found.
+bool app_start_benchmark(App& app, const std::string& path);
 // Stops profiling and saves it, returning the frames CSV's path.
 std::string app_finish_benchmark(App& app);
 // Shows the map's background and, with `preview`, plays its song from the

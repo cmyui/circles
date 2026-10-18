@@ -14,7 +14,8 @@ circles::App& app_of(GLFWwindow* window) {
 }
 
 // For measuring: `--benchmark <replay.osr>` watches a replay silently while
-// profiling and exits at its results, saving the profile to perf/.
+// profiling and exits at its results, saving the profile to perf/; given a
+// .osu, it watches Auto play the map.
 // `--size WxH` sets the window, `--uncapped` lifts the frame cap and
 // `--vsync` waits for the display.
 struct Options {
@@ -39,9 +40,10 @@ bool parse_options(int argc, char** argv, Options& options) {
     else if (!std::strcmp(argv[i], "--vsync"))
       options.vsync = true;
     else {
-      std::fprintf(stderr,
-                   "usage: circles [--benchmark replay.osr] [--size WxH] "
-                   "[--uncapped] [--vsync]\n");
+      std::fprintf(
+          stderr,
+          "usage: circles [--benchmark replay.osr|map.osu] [--size WxH] "
+          "[--uncapped] [--vsync]\n");
       return false;
     }
   }

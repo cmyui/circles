@@ -726,6 +726,7 @@ void app_scroll(App& app, f64 dy) {
 
 void app_cursor(App& app, f64 x, f64 y) {
   app.cursor = {static_cast<f32>(x), static_cast<f32>(y)};
+  app.cursor_moved = app.now;
   app.trail.push_back({glfwGetTime(), app.cursor});
   settings_cursor(app);
 }
@@ -749,20 +750,32 @@ void app_focus(App& app, bool focused) {
     gameplay_focus_lost(app);
 }
 
-bool app_start_benchmark(App& app, const std::string& replay_path) {
-  const auto replay = read_replay(replay_path, false);
-  if (!replay)
-    return false;
+bool app_start_benchmark(App& app, const std::string& path) {
+  namespace fs = std::filesystem;
+  const bool auto_play =
+      lowercase(fs::path(path).extension().string()) == ".osu";
+  std::error_code error;
+  std::string     md5;
+  if (!auto_play) {
+    const auto replay = read_replay(path, false);
+    if (!replay)
+      return false;
+    md5 = replay->beatmap_md5;
+  }
   i32 map = -1;
   for (size_t m = 0; m < app.library.maps.size(); ++m)
-    if (app.library.maps[m].md5 == replay->beatmap_md5)
+    if (auto_play ? fs::equivalent(app.library.maps[m].osu_path, path, error)
+                  : app.library.maps[m].md5 == md5)
       map = static_cast<i32>(m);
   if (map < 0)
     return false;
   // Silent, without touching the saved volume.
   set_master_volume(app.audio, 0);
   select_map(app, map, false);
-  app.replay_to_watch = replay_path;
+  if (auto_play)
+    app.mods = kAutoplay;
+  else
+    app.replay_to_watch = path;
   switch_screen(app, Screen::Gameplay);
   profiler_start(app.profiler, false);
   return true;
