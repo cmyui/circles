@@ -129,6 +129,7 @@ bool music_playing(const Audio& audio);
 bool music_at_end(const Audio& audio);
 void music_seek(Audio& audio, f64 ms);
 f64 music_position(const Audio& audio);  // ms
+f64 music_length(const Audio& audio);    // ms; 0 if unknown
 // Plays the music `rate` times as fast, from now on and for later tracks;
 // without `keep_pitch` the pitch rises and falls with it.
 void music_set_rate(Audio& audio, f64 rate, bool keep_pitch);

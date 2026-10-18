@@ -212,8 +212,8 @@ std::vector<u8> encode_replay(const Replay& replay) {
   out.put_u16(count(replay.counts.hit300));
   out.put_u16(count(replay.counts.hit100));
   out.put_u16(count(replay.counts.hit50));
-  out.put_u16(0);  // geki, for other modes
-  out.put_u16(0);  // katu, likewise
+  out.put_u16(count(replay.counts.geki));
+  out.put_u16(count(replay.counts.katu));
   out.put_u16(count(replay.counts.miss));
   out.put_i32(static_cast<i32>(std::clamp<i64>(replay.score, 0, INT32_MAX)));
   out.put_u16(count(replay.max_combo));
@@ -240,8 +240,8 @@ std::optional<Replay> decode_replay(std::span<const u8> data,
   replay.counts.hit300 = in.get_u16();
   replay.counts.hit100 = in.get_u16();
   replay.counts.hit50 = in.get_u16();
-  in.get_u16();
-  in.get_u16();
+  replay.counts.geki = in.get_u16();
+  replay.counts.katu = in.get_u16();
   replay.counts.miss = in.get_u16();
   replay.score = static_cast<u32>(in.get_i32());
   replay.max_combo = in.get_u16();

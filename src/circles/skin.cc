@@ -111,6 +111,7 @@ constexpr const char* kElements[] = {
     "spinner-middle2",
     "spinner-clear",
     "spinner-spin",
+    "spinner-approachcircle",
     "scorebar-bg",
     "scorebar-ki",
     "scorebar-marker",

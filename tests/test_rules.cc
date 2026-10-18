@@ -4,7 +4,8 @@
 #include <tests/support/test.h>
 
 static void test_difficulty_settings_convert_to_gameplay_values() {
-  CHECK_NEAR(circles::circle_radius(4), 36.48, 1e-9);
+  // Stable widens circles by 0.041%.
+  CHECK_NEAR(circles::circle_radius(4), 36.48 * 1.00041, 1e-9);
   CHECK_EQ(circles::approach_preempt(0), 1800);
   CHECK_EQ(circles::approach_preempt(5), 1200);
   CHECK_EQ(circles::approach_preempt(9), 600);
@@ -39,17 +40,14 @@ static void test_sliders_are_judged_by_the_fraction_of_parts_hit() {
   CHECK(circles::slider_judgement(0, 4) == Judgement::Miss);
 }
 
-static void test_spinners_need_more_turns_at_higher_od() {
+static void test_spinners_are_judged_in_half_turns() {
   using circles::Judgement;
-  CHECK_NEAR(circles::spins_per_second(5), 5, 1e-9);
-  CHECK_NEAR(circles::spins_per_second(0), 3, 1e-9);
-  CHECK_NEAR(circles::spins_per_second(10), 7.5, 1e-9);
-  CHECK_EQ(circles::required_spins(3000, 5), 9);
-  CHECK_EQ(circles::required_spins(100, 0), 1);
-  CHECK(circles::spinner_judgement(15, 15) == Judgement::Hit300);
-  CHECK(circles::spinner_judgement(13.5, 15) == Judgement::Hit100);
-  CHECK(circles::spinner_judgement(11.25, 15) == Judgement::Hit50);
-  CHECK(circles::spinner_judgement(11, 15) == Judgement::Miss);
+  // The requirement earns a 50; each half turn more is a step up.
+  CHECK(circles::spinner_judgement(14, 15) == Judgement::Miss);
+  CHECK(circles::spinner_judgement(15, 15) == Judgement::Hit50);
+  CHECK(circles::spinner_judgement(16, 15) == Judgement::Hit100);
+  CHECK(circles::spinner_judgement(17, 15) == Judgement::Hit300);
+  CHECK(circles::spinner_judgement(0, 0) == Judgement::Hit50);
 }
 
 static void test_score_grows_with_combo() {
@@ -64,12 +62,17 @@ static void test_score_grows_with_combo() {
 static void test_accuracy_and_grades() {
   using circles::Counts;
   using circles::Grade;
-  CHECK_NEAR(circles::accuracy({.hit300 = 1, .hit100 = 1}), 400.0 / 600, 1e-9);
+  CHECK_NEAR(circles::accuracy({.hit300 = 1, .hit100 = 1}), 400.0 / 600, 1e-6);
   CHECK(circles::grade({.hit300 = 100}) == Grade::SS);
   CHECK(circles::grade({.hit300 = 95, .hit100 = 5}) == Grade::S);
   // A miss rules out S, but enough 300s still make an A.
   CHECK(circles::grade({.hit300 = 95, .hit100 = 4, .miss = 1}) == Grade::A);
   CHECK(circles::grade({.hit300 = 95, .hit50 = 5}) == Grade::A);
+  // Exactly 1% 50s still allows an S.
+  CHECK(circles::grade({.hit300 = 99, .hit50 = 1}) == Grade::S);
+  // Stable's single-precision ratio makes exactly 80% 300s count as more.
+  CHECK(circles::grade({.hit300 = 80, .hit100 = 20}) == Grade::A);
+  CHECK(circles::grade({}) == Grade::D);
   CHECK(circles::grade({.hit300 = 85, .hit100 = 15}) == Grade::A);
   CHECK(circles::grade({.hit300 = 85, .hit100 = 14, .miss = 1}) == Grade::B);
   CHECK(circles::grade({.hit300 = 75, .hit100 = 25}) == Grade::B);
@@ -81,7 +84,7 @@ int main() {
   test_difficulty_settings_convert_to_gameplay_values();
   test_presses_are_judged_by_error_on_either_side();
   test_sliders_are_judged_by_the_fraction_of_parts_hit();
-  test_spinners_need_more_turns_at_higher_od();
+  test_spinners_are_judged_in_half_turns();
   test_score_grows_with_combo();
   test_accuracy_and_grades();
   return test_result();

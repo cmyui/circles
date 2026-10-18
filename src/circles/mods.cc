@@ -51,27 +51,49 @@ constexpr ModRow kRows[] = {
     {ModGroup::Special, "Special", kSpecialButtons},
 };
 
-// osu!stable's rules for which mods a mod turns off. Perfect, Nightcore and
-// Cinema carry Sudden Death's, Double Time's and Auto's bits, so their rules.
-struct Conflict {
-  Mods mod;
-  Mods excludes;
-};
+// osu!stable's rule for one mod: the mods it turns off, or the mod it
+// needs.
+Mods apply_rule(Mods mods, Mods mod) {
+  switch (mod) {
+    case kCinema:
+      return mods | kAutoplay;
+    case kNoFail:
+      return mods & ~(kSuddenDeath | kPerfect | kAutopilot | kRelax);
+    case kEasy:
+      return mods & ~kHardRock;
+    case kHardRock:
+      return mods & ~kEasy;
+    case kSuddenDeath:
+      return mods & ~(kNoFail | kAutopilot | kRelax);
+    case kPerfect:
+      return mods | kSuddenDeath;
+    case kDoubleTime:
+      return mods & ~kHalfTime;
+    case kNightcore:
+      return mods | kDoubleTime;
+    case kHalfTime:
+      return mods & ~(kDoubleTime | kNightcore);
+    case kRelax:
+      return mods & ~(kAutopilot | kNoFail | kSuddenDeath | kPerfect);
+    case kAutopilot:
+      return mods & ~(kSpunOut | kRelax | kNoFail | kSuddenDeath | kPerfect);
+    case kSpunOut:
+      return mods & ~kAutopilot;
+    default:
+      return mods;
+  }
+}
 
-constexpr Conflict kConflicts[] = {
-    {kNoFail, kSuddenDeath | kPerfect | kRelax | kAutopilot},
-    {kEasy, kHardRock},
-    {kHardRock, kEasy},
-    {kSuddenDeath, kNoFail | kRelax | kAutopilot | kAutoplay | kCinema},
-    {kDoubleTime, kHalfTime},
-    {kHalfTime, kDoubleTime | kNightcore},
-    {kRelax,
-     kNoFail | kSuddenDeath | kPerfect | kAutopilot | kAutoplay | kCinema},
-    {kAutopilot, kNoFail | kSuddenDeath | kPerfect | kRelax | kSpunOut |
-                     kAutoplay | kCinema},
-    {kSpunOut, kAutopilot | kAutoplay | kCinema},
-    {kAutoplay, kSuddenDeath | kPerfect | kRelax | kAutopilot | kSpunOut},
-};
+// Stable's check after any change: every mod's rule in bit order, then Auto
+// overrules the mods that play for you or fail you.
+Mods enforce_rules(Mods mods) {
+  for (Mods mod = 1; mod < kScoreV2; mod <<= 1)
+    if (mods & mod)
+      mods = apply_rule(mods, mod);
+  if (mods & kAutoplay)
+    mods &= ~(kSpunOut | kRelax | kAutopilot | kSuddenDeath | kPerfect);
+  return mods;
+}
 
 // A button's mods as one set, to clear it.
 Mods button_mods(const ModButton& button) {
@@ -94,12 +116,11 @@ Mods press_mod_button(Mods mods, const ModButton& button) {
   const i32 state = mod_button_state(mods, button);
   mods &= ~button_mods(button);
   if (state == 2 || (state == 1 && !button.mods[1]))
-    return mods;
+    return enforce_rules(mods);
+  // The chosen mod's own rule first, then everything's.
   const Mods chosen = button.mods[state == 1 ? 1 : 0];
-  for (const Conflict& conflict : kConflicts)
-    if (chosen & conflict.mod)
-      mods &= ~conflict.excludes;
-  return mods | chosen;
+  const Mods mod = state == 1 ? button.mods[1] & ~button.mods[0] : chosen;
+  return enforce_rules(apply_rule(mods | chosen, mod));
 }
 
 Difficulty apply_mods(Difficulty d, Mods mods) {
@@ -137,28 +158,36 @@ f64 mod_rate(Mods mods) {
 }
 
 f64 mod_score_multiplier(Mods mods) {
+  // Score V2 rewards Hard Rock and Double Time more, applied first.
   f64 multiplier = 1;
-  if (mods & kEasy)
-    multiplier *= 0.5;
+  if (mods & kScoreV2) {
+    if (mods & kHardRock)
+      multiplier *= 1.10;
+    if (mods & kDoubleTime)
+      multiplier *= 1.20;
+    mods &= ~(kHardRock | kDoubleTime);
+  }
+  // In osu!stable's order, which the floating-point result depends on.
+  f64 rest = 1;
   if (mods & kNoFail)
-    multiplier *= 0.5;
+    rest *= 0.5;
+  if (mods & kEasy)
+    rest *= 0.5;
   if (mods & kHalfTime)
-    multiplier *= 0.3;
-  // Score V2 rewards Hard Rock and Double Time more.
-  const bool v2 = mods & kScoreV2;
-  if (mods & kHardRock)
-    multiplier *= v2 ? 1.10 : 1.06;
-  if (mods & kDoubleTime)
-    multiplier *= v2 ? 1.20 : 1.12;
+    rest *= 0.3;
   if (mods & kHidden)
-    multiplier *= 1.06;
+    rest *= 1.06;
+  if (mods & kHardRock)
+    rest *= 1.06;
+  if (mods & kDoubleTime)
+    rest *= 1.12;
   if (mods & kFlashlight)
-    multiplier *= 1.12;
+    rest *= 1.12;
   if (mods & kSpunOut)
-    multiplier *= 0.9;
+    rest *= 0.9;
   if (mods & (kRelax | kAutopilot))
-    multiplier = 0;
-  return multiplier;
+    rest *= 0;
+  return multiplier * rest;
 }
 
 std::string mod_acronyms(Mods mods) {

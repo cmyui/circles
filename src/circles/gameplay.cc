@@ -1,12 +1,12 @@
 #include <circles/app.h>
+#include <circles/judging.h>
 
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <ctime>
-#include <fosu/slider_event.h>
-#include <fosu/slider_path.h>
+#include <random>
 #include <span>
 #include <string>
 #include <utility>
@@ -16,40 +16,14 @@ namespace circles {
 namespace {
 
 constexpr f32 kTau = 6.2831853f;
-constexpr f64 kHitAnimation = 240;   // ms a hit object takes to burst
-constexpr f64 kMissAnimation = 200;  // ms a missed object takes to fade
-constexpr f64 kPopupDuration = 750;  // ms a judgement stays on screen
-constexpr f64 kPathSpacing = 3;      // osu! pixels between body circles
-constexpr f32 kFollowScale = 2.4f;   // follow circle over circle radius
-constexpr f32 kMaxSpinSpeed = kTau * 8 / 1000;  // radians per ms
-// The clock eases toward the music's position at this rate (per second), and
-// snaps to it when they're further apart than the threshold (ms).
-constexpr f64 kClockCorrectionRate = 2;
-constexpr f64 kResyncThreshold = 50;
-constexpr f32 kFailDuration = 2;       // seconds the music takes to wind down
-constexpr f64 kFinishDelay = 1.5;      // seconds before showing results
-constexpr f64 kRecoverDuration = 1.5;  // seconds Easy's revive waits
-// ms between recorded frames while the keys rest; key changes add their own.
-constexpr f64 kRecordInterval = 8;
-
-// Health changes, as fractions of the bar.
-constexpr f64 kHealthHit300 = 0.06;
-constexpr f64 kHealthHit100 = 0.025;
-constexpr f64 kHealthHit50 = 0.005;
-constexpr f64 kHealthSliderPart = 0.015;
-constexpr f64 kHealthSpin = 0.02;
-
-// Spun Out and Autopilot turn spinners at this many radians per ms.
-constexpr f32 kAutoSpinSpeed = 0.03f;
-
-// Misses and passive drain grow with the map's HP setting.
-f64 miss_penalty(f64 hp) {
-  return 0.04 + 0.016 * hp;
-}
-
-f64 drain_per_second(f64 hp) {
-  return 0.02 + 0.008 * hp;
-}
+constexpr f64 kHitAnimation = 240;    // ms a hit object takes to burst
+constexpr f64 kMissAnimation = 60;    // ms a missed circle takes to fade
+constexpr f64 kPopupDuration = 1100;  // ms a judgement stays on screen
+constexpr f32 kFollowScale = 2.4f;    // follow circle over circle radius
+constexpr f32 kFailDuration = 2;      // seconds the music takes to wind down
+constexpr f64 kSixtyFrame = 1000.0 / 60;
+// Stable shows results 3 seconds after the last object ends.
+constexpr f64 kResultsDelay = 3000;
 
 const Color kDefaultComboColours[] = {hex_color(0xFFC000), hex_color(0x00CA00),
                                       hex_color(0x127CFF), hex_color(0xF21839)};
@@ -59,7 +33,9 @@ const Color kColour100 = hex_color(0x88EE55);
 const Color kColour50 = hex_color(0xFFCC22);
 const Color kColourMiss = hex_color(0xFF4466);
 
-// The 512x384 playfield, scaled and centred in the window.
+// The 512x384 playfield, placed as osu!stable places it: scaled with the
+// window's height as if it were 480 tall, centred across, and a little above
+// centre down.
 struct Playfield {
   f32 scale;  // window points per osu! pixel
   f32 x, y;   // top-left corner
@@ -70,481 +46,134 @@ struct Playfield {
   }
 };
 
+// Stable shortens windows squarer than 5:4 to that shape; here that game
+// area is centred in the window instead.
 Playfield playfield(const App& app) {
-  const f32 scale = std::min(app.height * 0.8f / kPlayfieldHeight,
-                             app.width * 0.8f / kPlayfieldWidth);
+  const f32 height = std::min(app.height, std::trunc(app.width * 0.8f));
+  const f32 scale = height / 480;
   return {scale, (app.width - kPlayfieldWidth * scale) / 2,
-          (app.height - kPlayfieldHeight * scale) / 2 + app.height * 0.02f};
+          (app.height - height) / 2 +
+              (height - kPlayfieldHeight * scale) * 0.75f - 16 * scale};
 }
 
 const Vec2 kPlayfieldCentre{kPlayfieldWidth / 2, kPlayfieldHeight / 2};
 
 // ---- Clock ----
 
-f64 audio_time_at(const Gameplay& game, f64 wall) {
-  return game.clock_time + (wall - game.clock_wall) * 1000 * game.rate;
+// Stable's offset, whole ms of song time between the music and the game:
+// 24 for maps before v5, a ms back under Half Time, and the global offset
+// scaled by the speed.
+i32 song_offset(const App& app) {
+  const auto& game = app.game;
+  i32         offset = game.map->format_version < 5 ? 24 : 0;
+  if (game.rate < 1)
+    offset -= static_cast<i32>((100 - game.rate * 100) / 75.0f * 5);
+  return offset + static_cast<i32>(game.rate * app.audio_offset);
 }
 
-// The audio offset in song time: a delay in real time spans more of a song
-// played faster.
-f64 song_offset(const App& app) {
-  return app.audio_offset * app.game.rate;
+// Stable's audio clock: it runs on frame time while the music plays, easing
+// toward the music's reported position by an eighth each frame, catching up
+// or slowing when off, and snapping when far off.
+void advance_clock(App& app) {
+  auto&     game = app.game;
+  const f64 increase = app.dt * 1000 * game.rate;
+  if (!game.audio_started || !music_playing(app.audio)) {
+    // Before the music, stable's clock skips over hitches.
+    if (increase < 60)
+      game.clock_time += increase;
+    return;
+  }
+  const f64 source = music_position(app.audio);
+  bool      snap = game.clock_time == 0 || source == 0;
+  if (!snap) {
+    f64 proposed = game.clock_time + increase;
+    proposed -= (proposed - source) / 8;
+    const f64 diff = proposed - source;
+    const f64 aim =
+        app.now - game.clock_synced < 1.5 || game.rate < 1 ? 11 : 33;
+    if (std::abs(diff) > aim * 2) {
+      snap = true;
+    } else if (diff < -aim) {
+      game.clock_time += increase * 2;
+      game.clock_synced = app.now;
+    } else if (diff < aim) {
+      game.clock_time = proposed;
+    } else {
+      game.clock_time += increase / 2;
+      game.clock_synced = app.now;
+    }
+  }
+  if (snap) {
+    game.clock_time = source;
+    game.clock_synced = app.now;
+  }
 }
 
-void set_clock(Gameplay& game, f64 audio_time, f64 wall) {
-  game.clock_time = audio_time;
-  game.clock_wall = wall;
+// The game's whole-ms time, as stable's game loop sees it.
+i32 game_time(const App& app) {
+  // Halves round to even, as .NET's Math.Round does.
+  return static_cast<i32>(std::nearbyint(app.game.clock_time)) -
+         song_offset(app);
 }
 
 bool in_break(const Gameplay& game) {
-  for (const auto& gap : game.map->breaks)
+  for (const auto& gap : game.breaks)
     if (game.time >= gap.start && game.time <= gap.end)
       return true;
   return false;
 }
 
-bool any_held(const Gameplay& game) {
-  return std::find(std::begin(game.held), std::end(game.held), true) !=
-         std::end(game.held);
-}
-
-// Skipping lands this long before the first object appears.
-f64 skip_target(const Gameplay& game) {
-  return game.objects.front().time - game.preempt - 1000;
-}
-
 bool can_skip(const Gameplay& game) {
-  return game.phase == GamePhase::Playing &&
-         game.time < skip_target(game) - 1000;
+  return game.phase == GamePhase::Playing && game.skip_boundary &&
+         game.time < *game.skip_boundary;
 }
 
-// ---- Loading ----
-
-std::vector<Vec2> sample_path(const fosu::SliderPath& path, Vec2 head) {
-  const i32 steps =
-      std::max(1, static_cast<i32>(std::ceil(path.distance() / kPathSpacing)));
-  std::vector<Vec2> points;
-  points.reserve(steps + 1);
-  for (i32 i = 0; i <= steps; ++i) {
-    const fosu::PathPoint p =
-        fosu::slider_position_at(path, static_cast<f64>(i) / steps);
-    points.push_back({head.x + p.x, head.y + p.y});
+// Stable's countdown, which sets where skipping lands when a map has one:
+// six of its beats before "go", the beat before the first object.
+std::optional<i32> countdown_skip(const fosu::Beatmap&                  map,
+                                  const std::vector<fosu::TimingPoint>& timing,
+                                  f64                                   first) {
+  const f64 offset = beat_offset_at(timing, first);
+  f64       original = beat_length_at(timing, first);
+  if (original <= 0)
+    original = beat_length_at(timing, 0);
+  if (original <= 0 || map.countdown == 0)
+    return std::nullopt;
+  f64 go = offset - 5;
+  f64 beat = original <= 333 ? original * 2 : original;
+  if (map.countdown == 3)
+    beat /= 2;
+  else if (map.countdown == 2)
+    beat *= 2;
+  first -= beat * map.countdown_offset;
+  if (go >= first)
+    while (go > first - beat)
+      go -= beat;
+  i32 divisor = 1;
+  while (go < first - beat / divisor) {
+    go += beat;
+    const f64 in_bar = std::fmod(static_cast<f32>(go - offset) / original, 4.0);
+    divisor = in_bar > 1.5 && in_bar < 3.5 ? 2 : 1;
   }
-  return points;
-}
-
-// ---- Slider geometry ----
-
-Vec2 flip(Vec2 p) {
-  return {p.x, kPlayfieldHeight - p.y};
-}
-
-// Where a slider event is, from its offset from the slider's head.
-Vec2 event_position(const Gameplay&          game,
-                    const GameObject&        object,
-                    const fosu::SliderEvent& event) {
-  const f32 y = game.mods & kHardRock ? -event.position.y : event.position.y;
-  return object.position + Vec2{event.position.x, y};
-}
-
-Vec2 path_point(const GameObject& object, f64 progress) {
-  const f64 index = std::clamp(progress, 0.0, 1.0) * (object.path.size() - 1);
-  const size_t i = static_cast<size_t>(index);
-  if (i + 1 >= object.path.size())
-    return object.path.back();
-  return lerp(object.path[i], object.path[i + 1], static_cast<f32>(index - i));
-}
-
-i32 current_span(const GameObject& object, f64 time) {
-  if (object.span_duration <= 0)
-    return 0;
-  return std::clamp(
-      static_cast<i32>(std::floor((time - object.time) / object.span_duration)),
-      0, object.slides - 1);
-}
-
-Vec2 ball_position(const GameObject& object, f64 time) {
-  if (object.span_duration <= 0)
-    return object.end_position;
-  const f64 elapsed =
-      std::clamp(time - object.time, 0.0, object.end_time - object.time);
-  const i32 span = current_span(object, time);
-  f64       progress = elapsed / object.span_duration - span;
-  if (span % 2)
-    progress = 1 - progress;
-  return path_point(object, progress);
-}
-
-// ---- Scoring ----
-
-f32 hitsound_pan(Vec2 position) {
-  return (position.x / kPlayfieldWidth - 0.5f) * 0.6f;
-}
-
-void play_hitsound(App&            app,
-                   const Hitsound& hitsound,
-                   f32             volume,
-                   Vec2            position) {
-  const f32 pan = hitsound_pan(position);
-  play_sound(app.audio,
-             hitsound_effect(hitsound.normal_set, HitsoundKind::Normal), volume,
-             pan);
-  constexpr std::pair<u32, HitsoundKind> kAdditions[] = {
-      {2, HitsoundKind::Whistle},
-      {4, HitsoundKind::Finish},
-      {8, HitsoundKind::Clap},
-  };
-  for (const auto& [bit, kind] : kAdditions)
-    if (hitsound.additions & bit)
-      play_sound(app.audio, hitsound_effect(hitsound.addition_set, kind),
-                 volume, pan);
-}
-
-void change_health(Gameplay& game, f64 amount) {
-  game.health = std::clamp(game.health + amount, 0.0, 1.0);
-}
-
-void add_combo(App& app) {
-  auto& game = app.game;
-  game.max_combo = std::max(game.max_combo, ++game.combo);
-  game.combo_changed = app.now;
-}
-
-void break_combo(App& app) {
-  auto& game = app.game;
-  if (game.combo >= 20)
-    play_sound(app.audio, Sound::ComboBreak, 0.8f);
-  game.combo = 0;
-  game.combo_changed = app.now;
-  // Sudden Death, and Perfect with it, ends the play at the first break.
-  if (game.mods & kSuddenDeath)
-    game.death = true;
-}
-
-// Score V2's total from its portions: up to 700,000 for combo and 300,000
-// for accuracy, with spinner bonus on top.
-void update_score_v2(Gameplay& game) {
-  const f64 judged =
-      static_cast<f64>(game.counts.total()) / game.objects.size();
-  game.score =
-      static_cast<i64>((game.combo_portion / game.combo_portion_max * 700000 +
-                        std::pow(accuracy(game.counts), 10) * judged * 300000 +
-                        game.bonus_portion) *
-                       game.mod_multiplier);
-}
-
-// Scores a whole object's judgement. Score V1's combo bonus counts the combo
-// before it, `combo_before`; Score V2 counts the combo after.
-void score_judgement(Gameplay& game, Judgement judgement, i32 combo_before) {
-  if (game.mods & kScoreV2) {
-    game.combo_portion += judgement_value(judgement) * (1 + game.combo / 10.0);
-    update_score_v2(game);
-  } else {
-    game.score += hit_score(judgement, combo_before, game.score_multiplier);
-  }
-}
-
-// Scores a slider's head, tick, repeat or end, worth `points` flat.
-void score_part(Gameplay& game, i32 points) {
-  if (game.mods & kScoreV2) {
-    game.combo_portion += points * (1 + game.combo / 10.0);
-    update_score_v2(game);
-  } else {
-    game.score += points;
-  }
-}
-
-void score_spin(Gameplay& game, bool bonus) {
-  if (game.mods & kScoreV2) {
-    game.bonus_portion += bonus ? 500 : 100;
-    update_score_v2(game);
-  } else {
-    game.score += bonus ? 1100 : 100;
-  }
-}
-
-// Records a whole object's judgement: a circle, a slider's end or a spinner.
-void finish_object(App&      app,
-                   size_t    index,
-                   Judgement judgement,
-                   Vec2      position,
-                   bool      adds_combo) {
-  auto& game = app.game;
-  auto& state = game.states[index];
-  // Perfect counts anything short of a 300 as a miss.
-  if (game.mods & kPerfect && judgement != Judgement::Hit300)
-    judgement = Judgement::Miss;
-  state.result = judgement;
-  state.result_time = game.time;
-  ++game.judged;
-  game.popups.push_back({game.time, position, judgement});
-  switch (judgement) {
-    case Judgement::Hit300:
-      ++game.counts.hit300;
-      change_health(game, kHealthHit300);
-      break;
-    case Judgement::Hit100:
-      ++game.counts.hit100;
-      change_health(game, kHealthHit100);
-      break;
-    case Judgement::Hit50:
-      ++game.counts.hit50;
-      change_health(game, kHealthHit50);
-      break;
-    default:
-      ++game.counts.miss;
-      change_health(game, -miss_penalty(game.hp));
-      break;
-  }
-  if (judgement == Judgement::Miss) {
-    break_combo(app);
-    if (game.mods & kScoreV2)
-      update_score_v2(game);
-    return;
-  }
-  const i32 combo_before = game.combo;
-  if (adds_combo)
-    add_combo(app);
-  score_judgement(game, judgement, combo_before);
-}
-
-// Judges a circle, or a slider's head (one part of the slider).
-void judge_head(App&      app,
-                size_t    index,
-                Judgement judgement,
-                f64       time,
-                f64       offset) {
-  auto&       game = app.game;
-  const auto& object = game.objects[index];
-  auto&       state = game.states[index];
-  state.head = judgement;
-  state.head_time = time;
-  if (judgement != Judgement::Miss) {
-    game.offsets.push_back(offset);
-    game.recent_errors.push_back({app.now, offset, judgement});
-  }
-  if (object.kind == ObjectKind::Circle) {
-    if (judgement != Judgement::Miss)
-      play_hitsound(app, object.hitsound, object.volume, object.position);
-    finish_object(app, index, judgement, object.position, true);
-    return;
-  }
-  ++state.parts_total;
-  if (judgement == Judgement::Miss) {
-    break_combo(app);
-    change_health(game, -2 * kHealthSliderPart);
-    game.popups.push_back({time, object.position, Judgement::Miss});
-    return;
-  }
-  ++state.parts_hit;
-  add_combo(app);
-  score_part(game, 30);
-  change_health(game, kHealthSliderPart);
-  play_hitsound(app, object.edge_hitsounds.front(), object.volume,
-                object.position);
-}
-
-// Misses every circle and slider head whose last chance ended before `time`.
-void expire_heads(App& app, f64 time) {
-  auto& game = app.game;
-  for (size_t i = game.first_active; i < game.objects.size(); ++i) {
-    const auto& object = game.objects[i];
-    if (object.time + game.windows.hit50 >= time)
-      break;
-    if (object.kind != ObjectKind::Spinner &&
-        game.states[i].head == Judgement::None)
-      judge_head(app, i, Judgement::Miss, object.time + game.windows.hit50,
-                 game.windows.hit50);
-  }
-}
-
-void handle_press(App& app, const Press& press) {
-  auto& game = app.game;
-  expire_heads(app, press.time);
-  const Vec2 cursor = playfield(app).to_playfield(press.cursor);
-  // Only the earliest unjudged circle or slider head can be hit ("note
-  // lock"), so mashing can't hit objects out of order.
-  for (size_t i = game.first_active; i < game.objects.size(); ++i) {
-    const auto& object = game.objects[i];
-    if (object.kind == ObjectKind::Spinner ||
-        game.states[i].head != Judgement::None)
-      continue;
-    // Autopilot's players only time their presses, so they get more room.
-    const bool autopilot = game.mods & kAutopilot;
-    const f64  offset = press.time - object.time;
-    if (offset < -(autopilot ? 200 : kMissWindow) ||
-        (cursor - object.position).length() > (autopilot ? 100 : game.radius))
-      return;
-    judge_head(app, i, judge_press(game.windows, offset), press.time, offset);
-    return;
-  }
-}
-
-void score_slider_part(App& app, size_t index, const fosu::SliderEvent& event) {
-  auto&       game = app.game;
-  const auto& object = game.objects[index];
-  auto&       state = game.states[index];
-  ++state.parts_total;
-  if (!state.tracking) {
-    // As in osu!, missing a slider's end costs accuracy and health, not combo.
-    if (event.type != fosu::SliderEventType::LegacyLastTick)
-      break_combo(app);
-    change_health(game, -kHealthSliderPart);
-    return;
-  }
-  ++state.parts_hit;
-  add_combo(app);
-  change_health(game, kHealthSliderPart);
-  const Vec2 position = event_position(game, object, event);
-  if (event.type == fosu::SliderEventType::Tick) {
-    score_part(game, 10);
-    play_sound(
-        app.audio,
-        hitsound_effect(object.hitsound.normal_set, HitsoundKind::SliderTick),
-        object.volume, hitsound_pan(position));
-    return;
-  }
-  score_part(game, 30);
-  if (event.type == fosu::SliderEventType::LegacyLastTick) {
-    state.end_hit = true;  // its sound waits for the end itself
-    return;
-  }
-  play_hitsound(app, object.edge_hitsounds[event.span_index + 1], object.volume,
-                position);
-}
-
-// A finished slider's judgement, by the fraction of its parts hit. Score V2
-// also caps it by its head's timing.
-Judgement slider_result(const Gameplay& game, const ObjectState& state) {
-  const Judgement result = slider_judgement(state.parts_hit, state.parts_total);
-  if (!(game.mods & kScoreV2) || result == Judgement::Miss)
-    return result;
-  return std::min(result, std::max(state.head, Judgement::Hit50));
-}
-
-void update_sliders(App& app) {
-  auto&      game = app.game;
-  const Vec2 cursor = playfield(app).to_playfield(game.cursor);
-  // Relax holds sliders by itself.
-  const bool holding = any_held(game) || game.mods & kRelax;
-  for (size_t i = game.first_active;
-       i < game.objects.size() && game.objects[i].time <= game.time; ++i) {
-    const auto& object = game.objects[i];
-    auto&       state = game.states[i];
-    if (object.kind != ObjectKind::Slider || state.result != Judgement::None)
-      continue;
-    // Once tracking, the cursor may wander as far as the follow circle.
-    const Vec2 ball = ball_position(object, game.time);
-    const f64  reach = game.radius * (state.tracking ? kFollowScale : 1);
-    const bool tracking = holding && (cursor - ball).length() <= reach;
-    if (tracking != state.tracking) {
-      state.tracking = tracking;
-      state.tracking_changed = game.time;
-    }
-    const auto events = game.map->slider_events[object.slider];
-    while (state.result == Judgement::None &&
-           state.next_event < events.size() &&
-           events[state.next_event].time <= game.time) {
-      const auto& event = events[state.next_event++];
-      switch (event.type) {
-        case fosu::SliderEventType::Head:
-          break;
-        case fosu::SliderEventType::Tick:
-        case fosu::SliderEventType::Repeat:
-        case fosu::SliderEventType::LegacyLastTick:
-          score_slider_part(app, i, event);
-          break;
-        case fosu::SliderEventType::Tail:
-          // A slider shorter than the hit window ends before its head
-          // expires.
-          if (state.head == Judgement::None)
-            judge_head(app, i, Judgement::Miss, game.time, game.windows.hit50);
-          if (state.end_hit)
-            play_hitsound(app, object.edge_hitsounds.back(), object.volume,
-                          object.end_position);
-          finish_object(app, i, slider_result(game, state), object.end_position,
-                        false);
-          break;
-      }
-    }
-  }
-}
-
-void update_spinners(App& app, f64 elapsed) {
-  auto&      game = app.game;
-  const Vec2 cursor = playfield(app).to_playfield(game.cursor);
-  // Relax spins without a key held.
-  const bool holding = any_held(game) || game.mods & kRelax;
-  for (size_t i = game.first_active;
-       i < game.objects.size() && game.objects[i].time <= game.time; ++i) {
-    const auto& object = game.objects[i];
-    auto&       state = game.states[i];
-    if (object.kind != ObjectKind::Spinner || state.result != Judgement::None)
-      continue;
-    if (game.mods & (kSpunOut | kAutopilot) && game.time <= object.end_time) {
-      state.rotation += kAutoSpinSpeed * static_cast<f32>(elapsed);
-      state.rpm = approach(state.rpm, kAutoSpinSpeed * 60000 / kTau, 6, app.dt);
-    } else if (holding && game.time <= object.end_time) {
-      const Vec2 offset = cursor - kPlayfieldCentre;
-      const f32  angle = std::atan2(offset.y, offset.x);
-      if (state.has_angle) {
-        f32 delta = angle - state.last_angle;
-        if (delta > kTau / 2)
-          delta -= kTau;
-        else if (delta < -kTau / 2)
-          delta += kTau;
-        // As in osu!stable, a turn of the hand counts for more when the song
-        // plays faster, up to a cap in song time.
-        delta *= static_cast<f32>(game.rate);
-        const f32 limit = kMaxSpinSpeed * static_cast<f32>(elapsed);
-        delta = std::clamp(delta, -limit, limit);
-        state.rotation += delta;
-        const f32 rpm = std::abs(delta) /
-                        std::max(static_cast<f32>(elapsed), 1e-3f) * 60000 /
-                        kTau;
-        state.rpm = approach(state.rpm, rpm, 6, app.dt);
-      }
-      state.last_angle = angle;
-      state.has_angle = true;
-    } else {
-      state.has_angle = false;
-      state.rpm = approach(state.rpm, 0, 6, app.dt);
-    }
-
-    const f64 turns = std::abs(state.rotation) / kTau;
-    while (state.spins_scored < static_cast<i32>(turns)) {
-      change_health(game, kHealthSpin);
-      if (++state.spins_scored <= object.required_spins) {
-        score_spin(game, false);
-      } else {
-        score_spin(game, true);
-        state.bonus_time = game.time;
-        play_sound(app.audio, Sound::SpinnerBonus, 0.6f);
-      }
-    }
-    if (game.time >= object.end_time)
-      finish_object(app, i, spinner_judgement(turns, object.required_spins),
-                    kPlayfieldCentre, true);
-  }
+  go -= beat;
+  if (go - 4 * beat <= 0)
+    return std::nullopt;
+  return static_cast<i32>(go) - 6 * static_cast<i32>(beat);
 }
 
 // ---- Phases ----
 
 void pause(App& app) {
-  auto& game = app.game;
-  set_clock(game, audio_time_at(game, app.now), app.now);
   music_pause(app.audio);
-  game.phase = GamePhase::Paused;
-  game.phase_changed = app.now;
-  game.menu_selection = 0;
+  app.game.phase = GamePhase::Paused;
+  app.game.phase_changed = app.now;
+  app.game.menu_selection = 0;
 }
 
 void resume(App& app) {
   auto& game = app.game;
-  game.clock_wall = app.now;
   if (game.audio_started)
     music_play(app.audio);
-  game.resync_after = app.now + 0.3;
   game.phase = GamePhase::Playing;
 }
 
@@ -556,13 +185,11 @@ void fail(App& app) {
   play_sound(app.audio, Sound::ComboBreak, 1);
 }
 
-// Easy revives a failing player: the music waits while health refills.
+// Easy's revive: the music waits while the bar refills from where it fell.
 void recover(App& app) {
   auto& game = app.game;
-  --game.recoveries;
-  set_clock(game, audio_time_at(game, app.now), app.now);
   music_pause(app.audio);
-  change_health(game, 0.8);
+  game.recovery_display = game.displayed_health * kHealthMax;
   game.phase = GamePhase::Recovering;
   game.phase_changed = app.now;
 }
@@ -571,18 +198,21 @@ void skip_intro(App& app) {
   auto& game = app.game;
   if (!can_skip(game))
     return;
-  const f64 target = skip_target(game) + song_offset(app);
-  set_clock(game, target, app.now);
-  if (game.audio_ok && target >= 0) {
-    music_seek(app.audio, target);
+  // Stable lands a little either side of the boundary, at random.
+  static std::mt19937 engine{std::random_device{}()};
+  const i32           target =
+      *game.skip_boundary + std::uniform_int_distribution<i32>(-80, 89)(engine);
+  game.clock_time = target + song_offset(app);
+  if (game.audio_ok && game.clock_time >= 0) {
+    music_seek(app.audio, game.clock_time);
     music_play(app.audio);
     game.audio_started = true;
   }
-  game.resync_after = app.now + 0.3;
+  game.skip_boundary.reset();
   play_sound(app.audio, Sound::MenuClick, 0.6f);
 }
 
-// ---- Replays ----
+// ---- Input and replays ----
 
 // Each hit key's bits in a replay frame. osu! marks a keyboard key with a
 // mouse button's bit too.
@@ -612,18 +242,13 @@ bool replay_holds(u32 keys, i32 key) {
   }
 }
 
-// Holds or releases a hit key. A press while playing is judged at `time`
-// where `cursor` (window points) was.
-void change_key(Gameplay& game, i32 key, bool down, f64 time, Vec2 cursor) {
-  if (game.held[key] == down)
-    return;
-  game.held[key] = down;
-  if (!down)
-    return;
-  ++game.press_counts[key];
-  // Relax hits by itself and ignores presses.
-  if (game.phase == GamePhase::Playing && !(game.mods & kRelax))
-    game.pending.push_back({time, cursor});
+// Shows a replay frame's keys on the key overlay.
+void show_replay_keys(Gameplay& game, u32 keys) {
+  for (i32 key = 0; key < kHitKeyCount; ++key) {
+    const bool down = replay_holds(keys, key);
+    game.press_counts[key] += down && !game.held[key];
+    game.held[key] = down;
+  }
 }
 
 // Where a replay's cursor is at `time`, between the frames either side.
@@ -646,38 +271,17 @@ Vec2 frame_position(const std::vector<ReplayFrame>& frames, f64 time) {
       span > 0 ? clamp01(static_cast<f32>((time - from.time) / span)) : 1);
 }
 
-// The cursor that hits at `time` while playing, in window points:
-// Autopilot's, or the mouse's.
+// The cursor while playing, in osu! pixels: Autopilot's, or the mouse's.
 Vec2 live_cursor(const App& app, f64 time) {
   if (app.game.mods & kAutopilot)
-    return playfield(app).to_screen(
-        frame_position(app.game.autopilot_frames, time));
-  return app.cursor;
+    return frame_position(app.game.autopilot_frames, time);
+  return playfield(app).to_playfield(app.cursor);
 }
 
-void record_frame(App& app, f64 time) {
-  auto& game = app.game;
-  // The clock's corrections can step back slightly; frames stay in order.
-  if (!game.frames.empty())
-    time = std::max(time, game.frames.back().time);
-  game.frames.push_back({time,
-                         playfield(app).to_playfield(live_cursor(app, time)),
-                         replay_keys(game)});
-}
-
-// Applies the replay's input up to the current time: its key changes as
-// presses and releases, then its cursor, interpolated between frames.
-void play_replay(App& app) {
-  auto&           game = app.game;
-  const auto&     frames = game.frames;
-  const Playfield field = playfield(app);
-  while (game.next_frame < frames.size() &&
-         frames[game.next_frame].time <= game.time) {
-    const ReplayFrame& frame = frames[game.next_frame++];
-    for (i32 key = 0; key < kHitKeyCount; ++key)
-      change_key(game, key, replay_holds(frame.keys, key), frame.time,
-                 field.to_screen(frame.position));
-  }
+// Where a watched replay's cursor is drawn: between its frames.
+void follow_replay_cursor(App& app) {
+  auto&       game = app.game;
+  const auto& frames = game.frames;
   if (frames.empty())
     return;
   const size_t next = std::min(game.next_frame, frames.size() - 1);
@@ -686,37 +290,25 @@ void play_replay(App& app) {
   const f64    span = to.time - from.time;
   const f32    t =
       span > 0 ? clamp01(static_cast<f32>((game.time - from.time) / span)) : 1;
-  game.cursor = field.to_screen(lerp(from.position, to.position, t));
+  game.cursor = playfield(app).to_screen(lerp(from.position, to.position, t));
   game.replay_trail.push_back({app.now, game.cursor});
 }
 
-void set_hit_key(App& app, i32 key, bool down, f64 wall) {
-  auto& game = app.game;
-  if (game.held[key] == down)
-    return;
-  // Whole ms, as replays store them, so watching judges presses identically.
-  const f64 time = std::round(audio_time_at(game, wall) - song_offset(app));
-  change_key(game, key, down, time, live_cursor(app, time));
-  if (game.phase == GamePhase::Playing)
-    record_frame(app, time);
+// Stable's 60 Hz "scorable" frames, by wall time, keeping their phase.
+bool sixty_hz_frame(App& app) {
+  auto&     game = app.game;
+  const f64 wall = app.now * 1000;
+  const f64 length = wall - game.sixty_last;
+  if (length < kSixtyFrame)
+    return false;
+  const bool busy =
+      game.active >= 0 && game.objects[game.active].kind != ObjectKind::Circle;
+  game.sixty_last = !busy && length > 500 ? wall - kSixtyFrame
+                                          : wall - (length - kSixtyFrame);
+  return true;
 }
 
 // ---- Mods ----
-
-// Relax hits the next circle or slider head once the cursor is on it, from
-// 11 ms before its time, as osu!stable's does.
-void relax_hits(App& app) {
-  auto& game = app.game;
-  for (size_t i = game.first_active; i < game.objects.size(); ++i) {
-    const auto& object = game.objects[i];
-    if (object.kind == ObjectKind::Spinner ||
-        game.states[i].head != Judgement::None)
-      continue;
-    if (object.time - game.time < 12)
-      game.pending.push_back({game.time, game.cursor});
-    return;
-  }
-}
 
 // The hole narrows at 100 and 200 combo and opens wide during breaks. It
 // trails the cursor slightly.
@@ -740,7 +332,7 @@ void update_flashlight(App& app) {
 void play_nightcore_beat(App& app) {
   auto&                    game = app.game;
   const fosu::TimingPoint* point = nullptr;
-  for (const auto& candidate : game.map->timing_points) {
+  for (const auto& candidate : game.timing) {
     if (candidate.time > game.time)
       break;
     if (candidate.uninherited && candidate.beat_length > 0)
@@ -770,90 +362,184 @@ void play_nightcore_beat(App& app) {
     play_sound(app.audio, Sound::NightcoreHat, 1);
 }
 
-// Score V2's combo portion for a perfect play, which its score scales
-// against.
-f64 perfect_combo_portion(const Gameplay& game) {
-  f64  portion = 0;
-  i32  combo = 0;
-  auto add = [&](i32 points, bool adds_combo) {
-    combo += adds_combo;
-    portion += points * (1 + combo / 10.0);
-  };
-  for (const auto& object : game.objects) {
-    if (object.kind != ObjectKind::Slider) {
-      add(300, true);
-      continue;
-    }
-    add(30, true);  // the head
-    for (const auto& event : game.map->slider_events[object.slider]) {
-      if (event.type == fosu::SliderEventType::Tick)
-        add(10, true);
-      else if (event.type == fosu::SliderEventType::Repeat ||
-               event.type == fosu::SliderEventType::LegacyLastTick)
-        add(30, true);
-    }
-    add(300, false);  // the whole slider's judgement adds no combo
-  }
-  return std::max(portion, 1.0);
-}
-
 // ---- Autoplay ----
 
-// Where autoplay's cursor circles a spinner, `elapsed` ms in.
-Vec2 auto_spinner_point(const Gameplay& game, f64 elapsed) {
-  constexpr f32 kRadius = 50;
-  // Just under the spin speed cap, which is in real time.
-  const f32     angle =
-      static_cast<f32>(elapsed * kMaxSpinSpeed * 0.95 / game.rate);
-  return kPlayfieldCentre + Vec2{std::cos(angle), std::sin(angle)} * kRadius;
+enum class Easing : u8 { Out, In, InOutCubic };
+
+f32 ease(Easing easing, f32 t) {
+  switch (easing) {
+    case Easing::Out:
+      return -t * (t - 2);
+    case Easing::In:
+      return t * t;
+    case Easing::InOutCubic:
+      return t < 0.5f ? 4 * t * t * t : (t - 1) * (2 * t - 2) * (2 * t - 2) + 1;
+  }
+  return t;
 }
 
-// A perfect play's input as replay frames: Auto and Cinema watch it, and
-// Autopilot's cursor follows it. Keys alternate between objects; the cursor
-// glides between them, follows sliders and circles spinners.
+// Inserts after any frames at the same time.
+void add_frame(std::vector<ReplayFrame>& frames, ReplayFrame frame) {
+  const auto at = std::upper_bound(frames.begin(), frames.end(), frame.time,
+                                   [](f64 t, const ReplayFrame& f) {
+                                     return t < f.time;
+                                   });
+  frames.insert(at, frame);
+}
+
+size_t insertion_index(const std::vector<ReplayFrame>& frames, f64 time) {
+  return std::upper_bound(frames.begin(), frames.end(), time,
+                          [](f64 t, const ReplayFrame& f) {
+                            return t < f.time;
+                          }) -
+         frames.begin();
+}
+
+// Stable's autoplay: a perfect play as replay frames at 60 per second of
+// real time. Auto and Cinema watch it; Autopilot's cursor follows it, with
+// movements held back as late as allows.
 std::vector<ReplayFrame> autoplay_frames(const Gameplay& game) {
-  constexpr f64            kInterval = 4;  // ms between frames
-  constexpr f64            kTap = 50;      // ms a circle's key stays down
-  std::vector<ReplayFrame> frames;
-  const auto&              objects = game.objects;
-  Vec2                     from = kPlayfieldCentre;
-  f64                      from_time = game.time;
+  const bool   delayed = game.mods & kAutopilot;
+  const Easing preferred = delayed ? Easing::InOutCubic : Easing::Out;
+  const auto&  objects = game.objects;
+  std::vector<ReplayFrame> replay;
+  add_frame(replay, {-100000, {256, 500}, 0});
+  add_frame(replay, {objects.front().time - 1500, {256, 500}, 0});
+  add_frame(replay, {objects.front().time - 1000, {256, 192}, 0});
+  const f32     frame_delay = static_cast<f32>(1000.0 / 60 * game.rate);
+  const Vec2    centre = kPlayfieldCentre;
+  constexpr f32 kSpinnerRadius = 50;
+  const i32     reaction = static_cast<i32>(100 * game.rate);
+  const f64     hit50 = game.windows.hit50, hit100 = game.windows.hit100;
+  i32           button_index = 0;
   for (size_t i = 0; i < objects.size(); ++i) {
-    const GameObject& object = objects[i];
-    const f64         next_time =
-        i + 1 < objects.size() ? objects[i + 1].time : object.end_time + 1000;
-    const Vec2 target = object.kind == ObjectKind::Spinner
-                            ? auto_spinner_point(game, 0)
-                            : object.position;
-    for (f64 t = from_time; t < object.time; t += kInterval) {
-      const f32 progress =
-          static_cast<f32>((t - from_time) / (object.time - from_time));
-      // Eased in and out, like a hand.
-      frames.push_back(
-          {t, lerp(from, target, progress * progress * (3 - 2 * progress)), 0});
+    const GameObject& h = objects[i];
+    const bool        spinner = h.kind == ObjectKind::Spinner;
+    if (delayed && i > 0) {
+      // Linger on each object as long as possible.
+      const GameObject& last = objects[i - 1];
+      const bool        last_spinner = last.kind == ObjectKind::Spinner;
+      for (const auto [lead, linger] :
+           {std::pair{400.0, hit50}, {hit50, hit50}, {hit100, hit100}}) {
+        if (h.time - lead > last.end_time + linger + 50) {
+          if (!last_spinner && h.time - last.end_time < 1000)
+            add_frame(replay, {last.end_time + linger, last.end_position, 0});
+          if (!spinner)
+            add_frame(replay, {h.time - lead, h.position, 0});
+          break;
+        }
+      }
     }
-    const u32 keys =
-        i % 2 ? kReplayKey2 | kReplayMouse2 : kReplayKey1 | kReplayMouse1;
-    // Held through the object, released before the next one.
-    const f64 release =
-        std::max(object.time + 1, std::min(object.kind == ObjectKind::Circle
-                                               ? object.time + kTap
-                                               : object.end_time + 10,
-                                           (object.end_time + next_time) / 2));
-    for (f64 t = object.time; t < release; t += kInterval) {
-      Vec2 position = target;
-      if (object.kind == ObjectKind::Slider)
-        position = ball_position(object, t);
-      else if (object.kind == ObjectKind::Spinner)
-        position = auto_spinner_point(
-            game, std::min(t, object.end_time) - object.time);
-      frames.push_back({t, position, keys});
+    Vec2   target = h.position;
+    Easing easing = preferred;
+    f32    direction = -1;
+    if (spinner) {
+      // Enter the spinner's circle on a tangent.
+      target = replay.back().position;
+      Vec2      difference = centre - target;
+      const f32 length = difference.length();
+      if (length > kSpinnerRadius) {
+        const f32 new_length =
+            std::sqrt(length * length - kSpinnerRadius * kSpinnerRadius);
+        const f32 angle = std::asin(kSpinnerRadius / length);
+        direction = angle > 0 ? -1 : 1;
+        difference.x =
+            difference.x * std::cos(angle) - difference.y * std::sin(angle);
+        difference.y =
+            difference.x * std::sin(angle) + difference.y * std::cos(angle);
+        const f32 inverse = 1.0f / difference.length();
+        difference = difference * inverse * new_length;
+        target = target + difference;
+        easing = Easing::In;
+      } else if (length > 0) {
+        target = centre - difference * (kSpinnerRadius / length);
+      } else {
+        target = centre + Vec2{0, -kSpinnerRadius};
+      }
     }
-    from = frames.back().position;
-    from_time = release;
-    frames.push_back({release, from, 0});
+
+    {
+      ReplayFrame last = replay.back();
+      // Auto waits until it could see and react to the next object.
+      const i32   wait =
+          static_cast<i32>(h.time - std::max(0.0, game.preempt - reaction));
+      if (wait > last.time) {
+        last = {static_cast<f64>(wait), last.position, last.keys};
+        add_frame(replay, last);
+      }
+      const f64 gap = (h.time - last.time) / game.rate;
+      // Glide to objects far enough apart; stream through close ones.
+      if (gap > 0 && ((last.position - target).length() >
+                          game.radius * (1.5 + 100.0 / gap) ||
+                      gap >= 266)) {
+        for (f32 t = static_cast<f32>(last.time) + frame_delay; t < h.time;
+             t += frame_delay) {
+          const f32 progress =
+              static_cast<f32>((t - last.time) / (h.time - last.time));
+          add_frame(
+              replay,
+              {std::trunc(t),
+               lerp(last.position, target, ease(easing, progress)), last.keys});
+        }
+        button_index = 0;
+      } else {
+        ++button_index;
+      }
+    }
+
+    u32          button = button_index % 2 ? kReplayMouse2 : kReplayMouse1;
+    ReplayFrame  press{h.time, target, button};
+    ReplayFrame  release{h.end_time + (spinner ? 1 : 0), h.end_position, 0};
+    const size_t before = insertion_index(replay, press.time);
+    if (before > 0 && replay[before - 1].keys) {
+      const u32 previous = replay[before - 1].keys;
+      if (previous == button) {
+        button = (kReplayMouse1 | kReplayMouse2) & ~button;
+        press.keys = button;
+      }
+      // Follow only the newest slider or spinner: drop frames during it.
+      const size_t end = insertion_index(replay, release.time);
+      if (before < replay.size())
+        replay.erase(replay.begin() + before,
+                     replay.begin() + std::max(before, end));
+      for (size_t j = before; j < replay.size(); ++j)
+        if (j + 1 < replay.size() || replay[j].keys == previous)
+          replay[j].keys = button;
+    }
+    add_frame(replay, press);
+
+    if (spinner) {
+      const Vec2 from = target - centre;
+      const f32  radius = from.length();
+      const f32  angle = radius == 0 ? 0 : std::atan2(from.y, from.x);
+      auto       spin_point = [&](f64 elapsed) {
+        const f32 t = static_cast<f32>(elapsed / game.rate) * direction;
+        return centre +
+               Vec2{
+                   static_cast<f32>(std::cos(t / 20 + angle) * kSpinnerRadius),
+                   static_cast<f32>(std::sin(t / 20 + angle) * kSpinnerRadius)};
+      };
+      for (f32 j = static_cast<f32>(h.time) + frame_delay; j < h.end_time;
+           j += frame_delay)
+        add_frame(replay, {std::trunc(j), spin_point(j - h.time), button});
+      const Vec2 end = spin_point(h.end_time - h.time);
+      add_frame(replay, {h.end_time, end, button});
+      release.position = end;
+    } else if (h.kind == ObjectKind::Slider) {
+      f64 last_time = 0;
+      for (const BallMove& move : h.moves) {
+        if (last_time != 0 && move.start - last_time < frame_delay)
+          continue;
+        add_frame(replay, {static_cast<f64>(move.start), move.from, button});
+        last_time = move.start;
+      }
+      add_frame(replay, {h.end_time, h.end_position, button});
+    }
+    // Let go only if nothing later is still going on.
+    if (replay.back().time <= release.time)
+      add_frame(replay, release);
   }
-  return frames;
+  return replay;
 }
 
 void quit_to_song_select(App& app) {
@@ -918,17 +604,22 @@ void finish(App& app) {
   if (!game.watching) {
     const char* user = std::getenv("USER");
     player = user ? user : "player";
-    replay_path = save_replay(
-        app, game.map_index,
-        {.beatmap_md5 = app.library.maps[game.map_index].md5,
-         .player = player,
-         .counts = game.counts,
-         .score = game.score,
-         .max_combo = game.max_combo,
-         .perfect = game.counts.miss == 0 && game.combo == game.max_combo,
-         .mods = game.mods,
-         .timestamp = std::time(nullptr),
-         .frames = std::move(game.frames)});
+    // Stable starts every replay with two frames of a hidden cursor.
+    game.frames.insert(
+        game.frames.begin(),
+        {{0, {256, -500}, 0},
+         {static_cast<f64>(game.lead_frame_time), {256, -500}, 0}});
+    replay_path =
+        save_replay(app, game.map_index,
+                    {.beatmap_md5 = app.library.maps[game.map_index].md5,
+                     .player = player,
+                     .counts = game.counts,
+                     .score = game.score,
+                     .max_combo = game.max_combo,
+                     .perfect = game.max_combo >= game.health_rules.max_combo,
+                     .mods = game.mods,
+                     .timestamp = std::time(nullptr),
+                     .frames = std::move(game.frames)});
     if (replay_path.empty())
       show_toast(app, "Couldn't save the replay");
   }
@@ -947,6 +638,28 @@ void finish(App& app) {
 }
 
 // ---- Drawing ----
+
+// A press note lock blocked shakes its object 8 pixels side to side for
+// 120 ms, as stable does.
+f32 shake_offset(const App& app, const ObjectState& state) {
+  const f32 ms = static_cast<f32>((app.now - state.shake_time) * 1000);
+  if (ms < 0 || ms >= 120)
+    return 0;
+  constexpr f32 kStops[] = {0, 8, -8, 8, -8, -8, 0};
+  const i32     step = static_cast<i32>(ms / 20);
+  // Stable's fifth step starts from the right again.
+  const f32     from = step == 4 ? 8 : kStops[step];
+  return from + (kStops[step + 1] - from) * (ms - step * 20) / 20;
+}
+
+// Which pass along its path a slider's ball is on.
+i32 current_span(const GameObject& object, f64 time) {
+  if (object.span_duration <= 0)
+    return 0;
+  return std::clamp(
+      static_cast<i32>(std::floor((time - object.time) / object.span_duration)),
+      0, object.slides - 1);
+}
 
 f32 appear_alpha(const Gameplay& game, const GameObject& object) {
   return clamp01(static_cast<f32>((game.time - (object.time - game.preempt)) /
@@ -1082,22 +795,29 @@ void draw_head(App&               app,
   const CirclePart part = object.kind == ObjectKind::Slider
                               ? CirclePart::SliderStart
                               : CirclePart::Hit;
+  // An unhit circle fades out between its 100 and 50 windows' ends.
+  const f32        expiring =
+      1 - clamp01(static_cast<f32>(
+              (game.time - (object.time + game.windows.hit100)) /
+              (game.windows.hit50 - game.windows.hit100)));
   if (state.head == Judgement::None) {
-    draw_hit_circle(app, center, radius, colour, appear * alpha_scale,
-                    object.combo_number, part);
+    draw_hit_circle(app, center, radius, colour,
+                    appear * expiring * alpha_scale, object.combo_number, part);
   } else if (state.head == Judgement::Miss) {
     const f32 t =
         static_cast<f32>((game.time - state.head_time) / kMissAnimation);
     if (t < 1)
-      draw_hit_circle(app, {center.x, center.y + t * radius * 0.3f}, radius,
-                      colour, (1 - t) * appear * alpha_scale,
+      draw_hit_circle(app, center, radius, colour,
+                      (1 - t) * appear * expiring * alpha_scale,
                       object.combo_number, part);
-  } else {
+  } else if (!(game.mods & kHidden)) {
+    // A hit swells to 1.4 times its size as it fades; with Hidden it's
+    // simply gone, as in osu!.
     const f32 t =
         static_cast<f32>((game.time - state.head_time) / kHitAnimation);
     if (t < 1)
-      draw_hit_circle(app, center, radius * (1 + 0.45f * ease_out(t)), colour,
-                      (1 - t) * alpha_scale, 0, part);
+      draw_hit_circle(app, center, radius * (1 + 0.4f * t * (2 - t)), colour,
+                      (1 - t) * alpha_scale, object.combo_number, part);
   }
 }
 
@@ -1116,8 +836,13 @@ void draw_approach_circle(App&             app,
   const f32  radius = static_cast<f32>(game.radius) * field.scale;
   const f32  growth =
       1 + 3 * static_cast<f32>((object.time - game.time) / game.preempt);
-  const Color colour = fade(combo_colour(game, object),
-                            appear_alpha(game, object) * alpha_scale);
+  // It fades in to 0.9 over 800 ms, or the whole approach if shorter.
+  const Color colour = fade(
+      combo_colour(game, object),
+      0.9f *
+          clamp01(static_cast<f32>((game.time - (object.time - game.preempt)) /
+                                   std::min(800.0, game.preempt))) *
+          alpha_scale);
   if (const auto* approach = skin_element(app.skin, "approachcircle")) {
     draw_skin_image(app.renderer, approach->front(), center.x, center.y,
                     object_scale(radius) * growth, colour);
@@ -1228,20 +953,22 @@ void draw_slider(App&             app,
   }
   if (appear > 0) {
     const auto* tick_image = skin_element(skin, "sliderscorepoint");
-    for (const auto& event : game.map->slider_events[object.slider]) {
-      if (event.type != fosu::SliderEventType::Tick ||
-          event.span_index != span || event.time <= game.time ||
-          event.path_progress > snake)
+    for (const SliderPoint& point : object.points) {
+      // Ticks on the first pass appear as the body reaches them.
+      if (point.kind != PointKind::Tick || point.span != span ||
+          point.time <= game.time ||
+          (span == 0 &&
+           (point.time - object.time) / object.span_duration > snake))
         continue;
-      const Vec2 tick = field.to_screen(event_position(game, object, event));
+      const Vec2 tick = field.to_screen(point.position);
       // Hidden fades each tick out over the second before it.
       f32        tick_alpha = appear;
       if (hidden) {
         const f64 from = std::max(object.time - game.preempt + game.fade_in,
-                                  event.time - 1000);
+                                  point.time - 1000.0);
         tick_alpha *=
             1 -
-            clamp01(static_cast<f32>((game.time - from) / (event.time - from)));
+            clamp01(static_cast<f32>((game.time - from) / (point.time - from)));
       }
       if (tick_image) {
         draw_skin_image(r, tick_image->front(), tick.x, tick.y, scale,
@@ -1340,9 +1067,11 @@ void draw_skin_spinner(App&               app,
   const auto& skin = app.skin;
   const auto& game = app.game;
   const Vec2  c = field.to_screen(kPlayfieldCentre);
-  // These images are drawn at 0.625 of their 1x size in playfield pixels.
-  const f32   scale = 0.625f * field.scale;
-  const f32   elapsed =
+  // These images are drawn at 0.625 of their 1x size in playfield pixels,
+  // starting at 0.8 of that and growing to full as the spinner fills.
+  const f32   scale =
+      0.625f * field.scale * (0.8f + 0.2f * completion * (2 - completion));
+  const f32 elapsed =
       clamp01(static_cast<f32>((game.time - object.time) /
                                std::max(1.0, object.end_time - object.time)));
   if (const auto* glow = skin_element(skin, "spinner-glow"))
@@ -1360,13 +1089,19 @@ void draw_skin_spinner(App&               app,
                     fade(mix(kWhite, hex_color(0xFF2222), elapsed), alpha));
   if (const auto* middle = skin_element(skin, "spinner-middle2"))
     draw_skin_image(r, middle->front(), c.x, c.y, scale, fade(kWhite, alpha));
+  // A ring shrinking from 1.86 times size to almost nothing; not for Hidden.
+  if (const auto* approach = skin_element(skin, "spinner-approachcircle");
+      approach && !(game.mods & kHidden) && game.time >= object.time)
+    draw_skin_image(r, approach->front(), c.x, c.y,
+                    0.625f * field.scale * (1.86f - 1.76f * elapsed),
+                    fade(kWhite, alpha));
   const f32 label_y = kPlayfieldHeight * 0.3f * field.scale;
   if (const auto* spin = skin_element(skin, "spinner-spin");
-      spin && game.time - object.time < 1500)
+      spin && (state.scored_turns == 0 || game.time < object.time + 500))
     draw_skin_image(r, spin->front(), c.x, c.y + label_y, ui_scale(app),
                     fade(kWhite, alpha));
   if (const auto* clear = skin_element(skin, "spinner-clear");
-      clear && completion >= 1)
+      clear && state.scored_turns >= object.required_spins)
     draw_skin_image(r, clear->front(), c.x, c.y - label_y, ui_scale(app),
                     fade(kWhite, alpha));
 }
@@ -1384,13 +1119,13 @@ void draw_spinner(App&             app,
       alpha_scale;
   if (state.result != Judgement::None)
     alpha *=
-        1 - clamp01(static_cast<f32>((game.time - state.result_time) / 300));
+        1 - clamp01(static_cast<f32>((game.time - state.result_time) / 240));
   if (alpha <= 0)
     return;
   const Vec2 c = field.to_screen(kPlayfieldCentre);
   const f32  size = kPlayfieldHeight * 0.48f * field.scale;
-  const f32  turns = std::abs(state.rotation) / kTau;
-  const f32  completion = clamp01(turns / object.required_spins);
+  const f32  completion =
+      clamp01(state.half_turns / std::max(1, object.required_spins));
   const bool skinned = skin_element(app.skin, "spinner-top");
 
   if (skinned) {
@@ -1422,25 +1157,27 @@ void draw_spinner(App&             app,
   }
 
   const f32   label_size = size * 0.16f;
-  const char* label = completion >= 1                  ? "CLEAR!"
-                      : game.time - object.time < 1500 ? "SPIN!"
-                                                       : nullptr;
+  // Stable shows "SPIN!" until spinning starts, and "CLEAR!" once it's
+  // enough for a 50.
+  const char* label = state.scored_turns >= object.required_spins ? "CLEAR!"
+                      : state.scored_turns == 0 || game.time < object.time + 500
+                          ? "SPIN!"
+                          : nullptr;
   if (label && !skinned)
     draw_text_shadowed(
         r, app.heavy, label, c.x,
         centered_baseline(app.heavy, label_size, c.y - size * 0.35f),
         label_size, fade(kWhite, alpha), Align::Center);
   char rpm[32];
-  snprintf(rpm, sizeof(rpm), "%d RPM", static_cast<i32>(state.rpm));
+  snprintf(rpm, sizeof(rpm), "%ld RPM", std::lround(state.rpm));
   draw_text_shadowed(r, app.bold, rpm, c.x, c.y + size * 0.62f,
                      label_size * 0.6f, fade(kWhite, 0.85f * alpha),
                      Align::Center);
-  const f32 bonus_age = static_cast<f32>((game.time - state.bonus_time) / 600);
+  const f32 bonus_age = static_cast<f32>((game.time - state.bonus_time) / 800);
   if (bonus_age < 1) {
     char bonus[32];
-    snprintf(bonus, sizeof(bonus), "+%d",
-             (state.spins_scored - object.required_spins) * 1000);
-    const f32 bonus_size = label_size * (1.4f - 0.3f * ease_out(bonus_age));
+    snprintf(bonus, sizeof(bonus), "%d", state.bonus);
+    const f32 bonus_size = label_size * (2 - 0.72f * ease_out(bonus_age));
     draw_text_shadowed(
         r, app.heavy, bonus, c.x,
         centered_baseline(app.heavy, bonus_size, c.y + size * 0.4f), bonus_size,
@@ -1450,47 +1187,49 @@ void draw_spinner(App&             app,
 
 // Dashes leading from one object to the next in a combo, vanishing as the
 // next object's time arrives.
-void draw_follow_points(App&             app,
-                        const Playfield& field,
-                        size_t           end,
-                        f32              alpha_scale) {
+void draw_follow_points(App& app, const Playfield& field, f32 alpha_scale) {
   const auto& game = app.game;
   const auto* sprite = skin_element(app.skin, "followpoint");
-  for (size_t i = std::max<size_t>(game.first_active, 1); i < end; ++i) {
+  const f32   scale = object_scale(static_cast<f32>(game.radius) * field.scale);
+  // As stable spaces them: from 48 pixels out, every 32, stopping 32 short.
+  // Each fades in over 400 ms, from 800 ms before the cursor should pass it,
+  // and out over 400 ms once it should have.
+  for (size_t i = std::max<size_t>(game.first_active, 1);
+       i < game.objects.size() &&
+       game.objects[i - 1].end_time - 800 <= game.time;
+       ++i) {
     const auto& from = game.objects[i - 1];
     const auto& to = game.objects[i];
     if (to.new_combo || from.kind == ObjectKind::Spinner ||
         to.kind == ObjectKind::Spinner)
       continue;
     const Vec2 delta = to.position - from.end_position;
-    const f32  distance = delta.length();
-    const f32  radius = static_cast<f32>(game.radius);
-    if (distance < radius * 2.5f)
-      continue;
-    const Vec2 direction = delta * (1 / distance);
-    const f32  angle = std::atan2(direction.y, direction.x);
-    const f64  duration = to.time - from.end_time;
-    for (f32 d = radius * 1.5f; d < distance - radius * 1.2f; d += 32) {
-      const f64 passes = from.end_time + duration * (d / distance);
-      const f64 appears = passes - game.preempt;
+    const i32  distance = static_cast<i32>(delta.length());
+    const f32  angle = std::atan2(delta.y, delta.x);
+    const f64  length = to.time - from.end_time;
+    for (i32 j = 48; j < distance - 32; j += 32) {
+      const f32 fraction = static_cast<f32>(j) / distance;
+      const f64 passes = std::trunc(from.end_time + fraction * length);
+      const f64 appears = passes - 800;
+      const f32 in = clamp01(static_cast<f32>((game.time - appears) / 400));
       const f32 alpha =
-          clamp01(static_cast<f32>((game.time - appears) / 200)) *
-          (1 - clamp01(static_cast<f32>((game.time - passes) / 120)));
+          in * (1 - clamp01(static_cast<f32>((game.time - passes) / 400)));
       if (alpha <= 0)
         continue;
+      const f32  slide = in * (2 - in);  // eased out
+      const Vec2 at = field.to_screen(from.end_position +
+                                      delta * (fraction - 0.1f * (1 - slide)));
       if (sprite) {
-        // Skins draw follow points one 1x pixel per playfield pixel.
-        const Vec2 at = field.to_screen(from.end_position + direction * d);
         draw_skin_image(
             app.renderer,
             skin_frame(app.skin, *sprite, (game.time - appears) / 1000), at.x,
-            at.y, field.scale, fade(kWhite, alpha * alpha_scale), angle);
+            at.y, scale * (1.5f - 0.5f * slide),
+            fade(kWhite, alpha * alpha_scale), angle);
         continue;
       }
-      const Vec2 a = field.to_screen(from.end_position + direction * (d - 5));
-      const Vec2 b = field.to_screen(from.end_position + direction * (d + 5));
-      draw_line(app.renderer, a.x, a.y, b.x, b.y, 2.2f * field.scale,
-                fade(kWhite, 0.7f * alpha * alpha_scale));
+      const Vec2 d = Vec2{std::cos(angle), std::sin(angle)} * (5 * field.scale);
+      draw_line(app.renderer, at.x - d.x, at.y - d.y, at.x + d.x, at.y + d.y,
+                2.2f * field.scale, fade(kWhite, 0.7f * alpha * alpha_scale));
     }
   }
 }
@@ -1502,10 +1241,30 @@ void draw_popups(App& app, const Playfield& field, f32 alpha_scale) {
     const f32 age = static_cast<f32>(game.time - popup.time);
     if (age < 0 || age > kPopupDuration)
       continue;
-    const f32 pop = 0.7f + 0.3f * ease_out(age / 120);
-    const f32 alpha = (1 - clamp01((age - 450) / 300)) * alpha_scale;
-    Vec2      at = field.to_screen(popup.position);
-    at.y += popup.judgement == Judgement::Miss ? age * 0.04f : -age * 0.015f;
+    // As stable animates them: in over 120 ms, out from 500 ms to 1100.
+    // Hits pop to 1.1 and settle; misses shrink from double size while
+    // dropping and tilting.
+    const bool miss = popup.judgement == Judgement::Miss;
+    const f32  alpha =
+        clamp01(age / 120) * (1 - clamp01((age - 500) / 600)) * alpha_scale;
+    f32  pop = 1;
+    f32  tilt = 0;
+    Vec2 at = field.to_screen(popup.position);
+    if (miss) {
+      pop = game.mods & kSuddenDeath ? 2 + 4 * clamp01(age / 600)
+                                     : 2 - clamp01(age / 120);
+      const f32 drop = clamp01(age / 1100);
+      at.y += (-5 + 45 * drop * drop) * field.scale;
+      tilt = age < 120 ? popup.tilt * age / 120
+                       : popup.tilt * (1 + clamp01((age - 120) / 980) *
+                                               clamp01((age - 120) / 980));
+    } else if (age < 96) {
+      pop = 0.6f + 0.5f * age / 96;
+    } else if (age < 120) {
+      pop = 1.1f;
+    } else {
+      pop = 0.9f + 0.1f * clamp01((age - 120) / 48);
+    }
 
     const char* element = popup.judgement == Judgement::Hit300   ? "hit300"
                           : popup.judgement == Judgement::Hit100 ? "hit100"
@@ -1513,7 +1272,8 @@ void draw_popups(App& app, const Playfield& field, f32 alpha_scale) {
                                                                  : "hit0";
     if (const auto* frames = skin_element(app.skin, element)) {
       draw_skin_image(app.renderer, skin_frame(app.skin, *frames, age / 1000),
-                      at.x, at.y, field.scale * pop, fade(kWhite, alpha));
+                      at.x, at.y, object_scale(radius) * pop,
+                      fade(kWhite, alpha), tilt);
       continue;
     }
     // Without a skin, 300s are the norm, so only worse judgements get a
@@ -1753,7 +1513,7 @@ void draw_game_overlays(App& app) {
   const auto& game = app.game;
 
   if (game.phase == GamePhase::Playing && in_break(game)) {
-    for (const auto& gap : game.map->breaks) {
+    for (const auto& gap : game.breaks) {
       if (game.time < gap.start || game.time > gap.end)
         continue;
       const f32 alpha = clamp01(static_cast<f32>(
@@ -1874,24 +1634,31 @@ bool gameplay_start(App& app, i32 map_index, std::string replay_path) {
     game.replay_player = std::move(replay->player);
     game.frames = std::move(replay->frames);
     game.mods = replay->mods;
+    // Stable's fixes for its replays' first frames, which it never judges.
+    auto& frames = game.frames;
+    if (frames.size() >= 2 && frames[1].time < frames[0].time) {
+      frames[1].time = frames[0].time;
+      frames[0].time = 0;
+    }
+    if (frames.size() >= 3 && frames[0].time > frames[2].time)
+      frames[0].time = frames[1].time = frames[2].time;
+    game.next_frame = 1;
   }
   game.rate = mod_rate(game.mods);
   game.parser = std::make_unique<fosu::Parser>();
   game.map = game.parser->parse_file(info.osu_path.c_str(),
-                                     {.calculate_slider_paths = true,
-                                      .calculate_slider_events = true,
-                                      .apply_stacking = true});
+                                     stable_parse_options(game.mods));
   if (!game.map || game.map->hit_objects.empty())
     return false;
   const auto&      map = *game.map;
-  const Difficulty difficulty =
-      apply_mods({map.cs, map.ar, map.od, map.hp}, game.mods);
-
+  // fosu has applied Hard Rock or Easy.
+  const Difficulty difficulty{map.cs, map.ar, map.od, map.hp};
   game.radius = circle_radius(difficulty.cs);
   game.preempt = approach_preempt(difficulty.ar);
   game.fade_in = approach_fade_in(game.preempt);
   game.windows = hit_windows(difficulty.od);
-  game.hp = difficulty.hp;
+  game.hp_setting = difficulty.hp;
+  game.timing = sorted_timing_points(map);
   // A map's own colours win over the skin's.
   for (u32 rgb : map.combo_colours)
     game.combo_colours.push_back(hex_color(rgb));
@@ -1900,114 +1667,96 @@ bool gameplay_start(App& app, i32 map_index, std::string replay_path) {
   if (game.combo_colours.empty())
     game.combo_colours.assign(std::begin(kDefaultComboColours),
                               std::end(kDefaultComboColours));
-  const SampleSet default_set =
+  game.default_sample_set =
       sample_set_or(static_cast<i32>(map.sample_set), SampleSet::Normal);
 
-  i32       combo_number = 0;
-  i32       colour = -1;
-  bool      after_spinner = true;  // the first object starts a combo too
-  size_t    timing = 0;
-  f32       volume = 1;
-  SampleSet timing_set = default_set;
-  for (size_t h = 0; h < map.hit_objects.size(); ++h) {
-    const auto& hit = map.hit_objects[h];
-    if (hit.is_hold())
-      continue;
-    // Objects use the timing point in effect at their time; osu! looks a few
-    // ms ahead so objects exactly on a point use it.
-    while (timing < map.timing_points.size() &&
-           map.timing_points[timing].time <= hit.time + 5) {
-      const auto& point = map.timing_points[timing++];
-      volume = point.volume / 100.0f;
-      timing_set =
-          sample_set_or(static_cast<i32>(point.sample_set), default_set);
-    }
-    const i32  sample_volume = hit_sample_volume(hit.hit_sample);
-
-    GameObject object{
-        .kind = hit.is_slider()    ? ObjectKind::Slider
-                : hit.is_spinner() ? ObjectKind::Spinner
-                                   : ObjectKind::Circle,
-        .time = hit.time,
-        .end_time = std::max(hit.time, hit.end_time),
-        .position = {hit.x, hit.y},
-        .end_position = {hit.x, hit.y},
-        .combo_number = 0,
-        .colour = 0,
-        .new_combo = hit.new_combo || after_spinner || hit.is_spinner(),
-        .hitsound = resolve_hitsound(hit.hitsound, hit.hit_sample, timing_set),
-        .volume = sample_volume > 0 ? sample_volume / 100.0f : volume,
-    };
-    if (object.new_combo) {
-      colour += 1 + hit.combo_skip;
-      combo_number = 0;
-    }
-    object.combo_number = ++combo_number;
-    object.colour = colour;
-    after_spinner = object.kind == ObjectKind::Spinner;
-
-    if (object.kind == ObjectKind::Slider) {
-      const auto& slider = map.sliders[hit.slider];
-      object.slider = hit.slider;
-      object.slides = std::max(1, slider.slides);
-      object.span_duration = (object.end_time - object.time) / object.slides;
-      object.path = sample_path(map.slider_paths[hit.slider], object.position);
-      object.end_position =
-          object.slides % 2 ? object.path.back() : object.position;
-      object.edge_hitsounds =
-          edge_hitsounds(slider.edge_sounds, slider.edge_sets,
-                         object.slides + 1, object.hitsound, timing_set);
-    } else if (object.kind == ObjectKind::Spinner) {
-      object.required_spins =
-          required_spins(object.end_time - object.time, difficulty.od);
-    }
-    // Hard Rock flips the playfield upside down. As in osu!stable, stacks
-    // still lean up and left, by an offset for the smaller circles.
-    if (game.mods & kHardRock) {
-      Vec2 shift{};
-      if (!map.stacking.empty()) {
-        const auto& stack = map.stacking[h];
-        const auto [x, y] = hit.raw_position(stack.stack_offset);
-        const f32 offset =
-            stack.stack_height * static_cast<f32>(game.radius) / 10;
-        shift = Vec2{x - offset, kPlayfieldHeight - y - offset} -
-                flip(object.position);
-      }
-      object.position = flip(object.position) + shift;
-      object.end_position = flip(object.end_position) + shift;
-      for (Vec2& point : object.path)
-        point = flip(point) + shift;
-    }
-    game.objects.push_back(std::move(object));
-  }
+  game.breaks = stable_breaks(map);
+  game.audio_ok = music_load(app.audio, info.audio_path);
+  game.objects = build_hit_objects(
+      map, {difficulty.od, game.audio_ok ? music_length(app.audio) : 0});
   if (game.objects.empty())
     return false;
+  // Each sound takes its sample set and volume from the timing point just
+  // after it, as stable looks them up.
+  auto timing_at = [&](f64 time) -> std::pair<SampleSet, f32> {
+    const auto* point = timing_point_at(game.timing, time + 5);
+    return {sample_set_or(point ? static_cast<i32>(point->sample_set) : 0,
+                          game.default_sample_set),
+            point ? point->volume / 100.0f : 1};
+  };
+  for (GameObject& object : game.objects) {
+    const auto& hit = map.hit_objects[object.source];
+    const i32   sample_volume = hit_sample_volume(hit.hit_sample);
+    const auto  fields = split(hit.hit_sample, ':');
+    object.sample_set = fields.empty() ? 0 : field_value(fields[0]);
+    const auto [set, volume] = timing_at(object.time);
+    object.hitsound = resolve_hitsound(hit.hitsound, hit.hit_sample, set);
+    object.volume = sample_volume > 0 ? sample_volume / 100.0f : volume;
+    if (object.kind != ObjectKind::Slider)
+      continue;
+    const auto&      slider = map.sliders[object.slider];
+    const i32        edges = object.slides + 1;
+    std::vector<f64> edge_times{object.time};
+    for (const SliderPoint& point : object.points)
+      if (point.kind == PointKind::Repeat)
+        edge_times.push_back(point.time);
+    edge_times.push_back(object.end_time);
+    for (i32 e = 0; e < edges; ++e) {
+      const auto [edge_set, edge_volume] =
+          timing_at(edge_times[std::min<size_t>(e, edge_times.size() - 1)]);
+      const Hitsound base =
+          resolve_hitsound(hit.hitsound, hit.hit_sample, edge_set);
+      object.edge_hitsounds.push_back(edge_hitsounds(
+          slider.edge_sounds, slider.edge_sets, edges, base, edge_set)[e]);
+      object.edge_volumes.push_back(sample_volume > 0 ? sample_volume / 100.0f
+                                                      : edge_volume);
+    }
+  }
   game.states.assign(game.objects.size(), ObjectState{});
-
-  const f64 first = game.objects.front().time;
   for (const auto& object : game.objects)
     game.end_time = std::max(game.end_time, object.end_time);
-  f64 break_time = 0;
-  for (const auto& gap : map.breaks)
-    break_time += gap.end - gap.start;
+
   // osu!stable rates the map before mods, over whole seconds between the
-  // first and last objects' starts.
+  // first and last objects' starts in file order, less breaks.
+  i32 break_time = 0;
+  for (const auto& gap : map.breaks)
+    break_time += static_cast<i32>(gap.end) - static_cast<i32>(gap.start);
+  const i32 drain_seconds =
+      (static_cast<i32>(map.hit_objects.back().time) -
+       static_cast<i32>(map.hit_objects.front().time) - break_time) /
+      1000;
   game.mod_multiplier = mod_score_multiplier(game.mods);
   game.score_multiplier =
-      difficulty_multiplier(
-          map.hp, map.cs, map.od, game.objects.size(),
-          static_cast<i32>((game.objects.back().time - first - break_time) /
-                           1000)) *
+      difficulty_multiplier(map.hp, map.cs, map.od, map.hit_objects.size(),
+                            drain_seconds) *
       game.mod_multiplier;
-  if (game.mods & kScoreV2)
-    game.combo_portion_max = perfect_combo_portion(game);
-  game.recoveries = game.mods & kEasy && !(game.mods & kSuddenDeath) ? 2 : 0;
+  start_judging(app, map);
 
-  // Start early enough for the lead-in and for the first object to appear.
-  const f64 start = std::min(
-      {0.0, first - game.preempt - 1000, -static_cast<f64>(map.audio_lead_in)});
-  set_clock(game, start + song_offset(app), app.now);
-  game.time = start;
+  // Stable leads in long enough for the map's lead-in and for the first
+  // object to appear, and offers a skip if the intro is long.
+  const f64 first = game.objects.front().time;
+  const f64 lead_in = std::max(static_cast<f64>(map.audio_lead_in),
+                               std::max(1800.0, game.preempt) - first);
+  game.clock_time = -lead_in;
+  game.time = game.clock_time - song_offset(app);
+  game.replay_tick = game.time;
+  std::optional<i32> boundary = countdown_skip(map, game.timing, first);
+  if (!boundary) {
+    // The beat of the timing point in effect as the song starts.
+    const fosu::TimingPoint* point = nullptr;
+    for (const auto& candidate : game.timing)
+      if (candidate.uninherited && (!point || candidate.time <= 0))
+        point = &candidate;
+    if (point && point->beat_length > 0)
+      boundary = static_cast<i32>(
+          first - point->beat_length * (point->beat_length < 500 ? 8 : 4));
+    else
+      boundary = static_cast<i32>(first - 2000);
+  }
+  if (*boundary + lead_in > 1200 + game.preempt)
+    game.skip_boundary = boundary;
+  game.lead_frame_time = (game.skip_boundary ? *game.skip_boundary : 0) - 1;
+
   // Auto and Cinema watch a perfect play made up on the spot, and
   // Autopilot's cursor follows one.
   if (!game.watching && game.mods & kAutoplay) {
@@ -2018,7 +1767,6 @@ bool gameplay_start(App& app, i32 map_index, std::string replay_path) {
     game.autopilot_frames = autoplay_frames(game);
   }
   game.cursor = game.flashlight_position = app.cursor;
-  game.audio_ok = music_load(app.audio, info.audio_path);
   if (game.audio_ok) {
     music_pause(app.audio);
     music_set_rate(app.audio, game.rate, !mods_change_pitch(game.mods));
@@ -2050,97 +1798,109 @@ void gameplay_update(App& app) {
     return;
   }
   if (game.phase == GamePhase::Recovering) {
-    game.displayed_health = approach(game.displayed_health,
-                                     static_cast<f32>(game.health), 3, app.dt);
-    if (app.now - game.phase_changed > kRecoverDuration)
+    // The bar refills at stable's rate, and play resumes once it's nearly
+    // full.
+    game.recovery_display += 0.08 * app.dt * 1000;
+    game.displayed_health = static_cast<f32>(
+        std::min(game.recovery_display, game.health) / kHealthMax);
+    if (game.recovery_display > game.health - 5)
       resume(app);
     return;
   }
 
-  // Start the music when its time comes, then follow it. Easing absorbs small
-  // drift and the music position's coarse updates without objects jumping.
-  f64 audio_time = audio_time_at(game, app.now);
-  if (game.audio_ok && !game.audio_started && audio_time >= 0) {
-    music_seek(app.audio, audio_time);
+  advance_clock(app);
+  if (game.audio_ok && !game.audio_started && game.clock_time >= 0) {
+    music_seek(app.audio, game.clock_time);
     music_play(app.audio);
     game.audio_started = true;
-    game.resync_after = app.now + 0.3;
-  } else if (game.audio_started && music_playing(app.audio) &&
-             app.now >= game.resync_after) {
-    const f64 error = music_position(app.audio) - audio_time;
-    if (std::abs(error) > kResyncThreshold)
-      game.clock_time += error;
-    else
-      game.clock_time += error * std::min(1.0, app.dt * kClockCorrectionRate);
-    audio_time = audio_time_at(game, app.now);
   }
-  const f64 previous = game.time;
-  game.time = audio_time - song_offset(app);
-  const f64 elapsed = std::max(0.0, game.time - previous);
+  game.outro = game.audio_started && music_at_end(app.audio);
+  const i32   now = game_time(app);
+  StepOutcome outcome = StepOutcome::Continue;
   if (game.watching) {
-    play_replay(app);
+    // Stable judges a replay at each of its frames. Between them its game
+    // loop still runs every display frame, turning spinners and draining
+    // health, and for Auto scoring sliders, with the cursor eased between
+    // frames; here, every ms.
+    const auto& frames = game.frames;
+    while (outcome == StepOutcome::Continue) {
+      const bool frame_due = game.next_frame < frames.size() &&
+                             frames[game.next_frame].time <= now;
+      const f64  until = frame_due ? frames[game.next_frame].time : now + 1;
+      while (game.replay_tick < until && outcome == StepOutcome::Continue) {
+        const i32 time = static_cast<i32>(game.replay_tick);
+        game.replay_tick += 1;
+        if (game.next_frame == 0)
+          continue;
+        const ReplayFrame& from = frames[game.next_frame - 1];
+        Vec2               cursor = from.position;
+        if (game.next_frame < frames.size()) {
+          const ReplayFrame& to = frames[game.next_frame];
+          if (to.time != from.time)
+            cursor = lerp(
+                from.position, to.position,
+                std::max(0.0f, 1 - static_cast<f32>(to.time - time) /
+                                       static_cast<f32>(to.time - from.time)));
+        }
+        outcome = play_step(app, time, cursor, from.keys, false);
+      }
+      if (!frame_due || outcome != StepOutcome::Continue)
+        break;
+      const ReplayFrame& frame = frames[game.next_frame++];
+      show_replay_keys(game, frame.keys);
+      outcome = play_step(app, static_cast<i32>(frame.time), frame.position,
+                          frame.keys, true);
+      game.replay_tick = std::max(game.replay_tick, frame.time + 1);
+    }
+    game.time = now;
+    follow_replay_cursor(app);
   } else {
-    game.cursor = live_cursor(app, game.time);
+    const Vec2 cursor = live_cursor(app, now);
+    game.cursor = playfield(app).to_screen(cursor);
     if (game.mods & kAutopilot)
       game.replay_trail.push_back({app.now, game.cursor});
-    if (game.frames.empty() ||
-        game.time - game.frames.back().time >= kRecordInterval)
-      record_frame(app, game.time);
+    const bool scorable = sixty_hz_frame(app);
+    const u32  keys = replay_keys(game);
+    outcome = play_step(app, now, cursor, keys, scorable);
+    // As stable records: a frame each 60th of a second, and whenever the
+    // keys change or something scores.
+    if (game.audio_started || !game.audio_ok) {
+      if (scorable || game.force_frame || game.frames.empty() ||
+          keys != game.frames.back().keys)
+        game.frames.push_back(
+            {std::max<f64>(now,
+                           game.frames.empty() ? now : game.frames.back().time),
+             cursor, keys});
+      game.force_frame = false;
+    }
   }
-  if (game.mods & kRelax)
-    relax_hits(app);
+  switch (outcome) {
+    case StepOutcome::Fail:
+      fail(app);
+      return;
+    case StepOutcome::Recover:
+      recover(app);
+      return;
+    case StepOutcome::Restart:
+      gameplay_start(app, game.map_index);
+      return;
+    case StepOutcome::Continue:
+      break;
+  }
   if (game.mods & kFlashlight)
     update_flashlight(app);
   if (game.mods & kNightcore)
     play_nightcore_beat(app);
 
-  for (const auto& press : game.pending)
-    handle_press(app, press);
-  game.pending.clear();
-  expire_heads(app, game.time);
-  update_sliders(app);
-  update_spinners(app, elapsed);
-
   while (game.first_active < game.objects.size() &&
-         game.states[game.first_active].result != Judgement::None &&
+         game.states[game.first_active].hit &&
          game.time > game.objects[game.first_active].end_time + 1000)
     ++game.first_active;
-
-  if (!in_break(game) && game.time >= game.objects.front().time &&
-      game.time <= game.end_time)
-    change_health(game, -drain_per_second(game.hp) *
-                            (game.mods & kHalfTime ? 0.75 : 1) * elapsed /
-                            1000);
-  // Sudden Death fails at the first break; Perfect restarts, as in osu!.
-  if (game.death && !game.watching) {
-    if (game.mods & kPerfect)
-      gameplay_start(app, game.map_index);
-    else
-      fail(app);
-    return;
-  }
-  // A replay fails where its input ends early, as when its player failed or
-  // quit, not by health, which may have run differently.
-  const bool replay_over = game.watching && !game.frames.empty() &&
-                           game.time > game.frames.back().time + 1000;
-  const bool can_fail = !(game.mods & (kNoFail | kRelax | kAutopilot)) &&
-                        game.time >= game.objects.front().time;
-  if (!game.finished && game.watching && replay_over) {
-    fail(app);
-    return;
-  }
-  if (!game.finished && !game.watching && can_fail && game.health <= 0) {
-    if (game.recoveries > 0)
-      recover(app);
-    else
-      fail(app);
-    return;
-  }
-
   game.displayed_score =
       game.score + (game.displayed_score - game.score) * std::exp(-12 * app.dt);
-  game.displayed_health = approach(game.displayed_health,
-                                   static_cast<f32>(game.health), 10, app.dt);
+  game.displayed_health =
+      approach(game.displayed_health,
+               static_cast<f32>(game.health / kHealthMax), 10, app.dt);
   game.dim = approach(game.dim, in_break(game) ? 0.5f : 0.8f, 3, app.dt);
   std::erase_if(game.popups, [&](const Popup& popup) {
     return game.time - popup.time > kPopupDuration;
@@ -2149,12 +1909,11 @@ void gameplay_update(App& app) {
     return app.now - error.wall_time > 4;
   });
 
-  if (!game.finished && game.judged == game.objects.size()) {
+  // Stable passes the play 200 ms after the last object ends, and shows
+  // results 3 seconds after.
+  if (!game.finished && game.time > game.end_time + 200)
     game.finished = true;
-    game.finished_at = app.now;
-  }
-  // Only once, though the screen keeps updating while it fades out.
-  if (game.finished && app.now - game.finished_at > kFinishDelay &&
+  if (game.finished && game.time >= game.end_time + kResultsDelay &&
       app.transition_started < 0)
     finish(app);
 }
@@ -2181,15 +1940,17 @@ void gameplay_draw(App& app) {
          game.objects[end].time - game.preempt <= game.time)
     ++end;
   if (alpha_scale > 0) {
-    draw_follow_points(app, field, end, alpha_scale);
+    draw_follow_points(app, field, alpha_scale);
     // Earlier objects draw on top of later ones.
     for (size_t i = end; i-- > game.first_active;) {
+      Playfield shaken = field;
+      shaken.x += shake_offset(app, game.states[i]) * field.scale;
       switch (game.objects[i].kind) {
         case ObjectKind::Circle:
-          draw_head(app, field, game.objects[i], game.states[i], alpha_scale);
+          draw_head(app, shaken, game.objects[i], game.states[i], alpha_scale);
           break;
         case ObjectKind::Slider:
-          draw_slider(app, field, i, alpha_scale);
+          draw_slider(app, shaken, i, alpha_scale);
           break;
         case ObjectKind::Spinner:
           draw_spinner(app, field, i, alpha_scale);
@@ -2206,12 +1967,15 @@ void gameplay_draw(App& app) {
   draw_game_overlays(app);
 }
 
-void gameplay_key(App& app, i32 key, i32 action, f64 wall) {
+void gameplay_key(App& app, i32 key, i32 action, f64 /*wall*/) {
   auto& game = app.game;
   if (key == GLFW_KEY_Z || key == GLFW_KEY_X) {
-    if (action != GLFW_REPEAT && !game.watching)
-      set_hit_key(app, key == GLFW_KEY_Z ? kKey1 : kKey2, action == GLFW_PRESS,
-                  wall);
+    // The game reads which keys are held each frame, as stable does.
+    if (action != GLFW_REPEAT && !game.watching) {
+      const i32 hit_key = key == GLFW_KEY_Z ? kKey1 : kKey2;
+      game.press_counts[hit_key] += action == GLFW_PRESS;
+      game.held[hit_key] = action == GLFW_PRESS;
+    }
     return;
   }
   if (action == GLFW_RELEASE || game.phase == GamePhase::Recovering)
@@ -2248,7 +2012,7 @@ void gameplay_key(App& app, i32 key, i32 action, f64 wall) {
   }
 }
 
-void gameplay_click(App& app, i32 button, i32 action, f64 wall) {
+void gameplay_click(App& app, i32 button, i32 action, f64 /*wall*/) {
   auto&      game = app.game;
   const bool hit_button =
       button == GLFW_MOUSE_BUTTON_LEFT || button == GLFW_MOUSE_BUTTON_RIGHT;
@@ -2256,9 +2020,11 @@ void gameplay_click(App& app, i32 button, i32 action, f64 wall) {
   // buttons are switched off, isn't stuck down.
   if (hit_button && !game.watching &&
       (action == GLFW_RELEASE ||
-       (game.phase == GamePhase::Playing && app.mouse_buttons)))
-    set_hit_key(app, button == GLFW_MOUSE_BUTTON_LEFT ? kMouse1 : kMouse2,
-                action == GLFW_PRESS, wall);
+       (game.phase == GamePhase::Playing && app.mouse_buttons))) {
+    const i32 hit_key = button == GLFW_MOUSE_BUTTON_LEFT ? kMouse1 : kMouse2;
+    game.press_counts[hit_key] += action == GLFW_PRESS;
+    game.held[hit_key] = action == GLFW_PRESS;
+  }
   const bool menu =
       game.phase == GamePhase::Paused || game.phase == GamePhase::Failed;
   if (menu && button == GLFW_MOUSE_BUTTON_LEFT && action == GLFW_PRESS)

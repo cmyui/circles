@@ -13,6 +13,7 @@ struct Vec2 {
   Vec2 operator-(Vec2 b) const { return {x - b.x, y - b.y}; }
   Vec2 operator*(f32 scale) const { return {x * scale, y * scale}; }
   f32 length() const { return std::sqrt(x * x + y * y); }
+  bool operator==(const Vec2&) const = default;
 };
 
 inline Vec2 lerp(Vec2 a, Vec2 b, f32 t) {

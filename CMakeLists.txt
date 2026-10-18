@@ -35,6 +35,9 @@ add_library(circles_core STATIC
   src/circles/audio.cc
   src/circles/gameplay.cc
   src/circles/gfx.cc
+  src/circles/health.cc
+  src/circles/hit_objects.cc
+  src/circles/judging.cc
   src/circles/library.cc
   src/circles/md5.cc
   src/circles/menu.cc
@@ -49,6 +52,9 @@ add_library(circles_core STATIC
 target_include_directories(circles_core PUBLIC src)
 target_compile_definitions(circles_core PUBLIC GL_SILENCE_DEPRECATION)
 target_compile_options(circles_core PRIVATE -Wall -Wextra)
+# osu!stable computes one floating-point operation at a time; fused
+# multiply-adds would change its judgements' arithmetic.
+target_compile_options(circles_core PUBLIC -ffp-contract=off)
 target_link_libraries(circles_core PUBLIC
   circles_third_party PkgConfig::GLFW PkgConfig::LZMA "-framework OpenGL")
 
@@ -57,7 +63,7 @@ target_compile_options(circles PRIVATE -Wall -Wextra)
 target_link_libraries(circles PRIVATE circles_core)
 
 if(BUILD_TESTING)
-  set(_tests rules archive skin hitsounds md5 replay stretch mods)
+  set(_tests rules archive skin hitsounds md5 replay stretch mods hit_objects)
   set(_test_targets)
   foreach(name IN LISTS _tests)
     list(APPEND _test_targets test_${name})

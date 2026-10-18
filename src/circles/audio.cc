@@ -520,6 +520,14 @@ void music_seek(Audio& audio, f64 ms) {
                                              music_sample_rate(audio) / 1000));
 }
 
+f64 music_length(const Audio& audio) {
+  if (!audio.music_loaded)
+    return 0;
+  ma_uint64 length = 0;
+  ma_data_source_get_length_in_pcm_frames(&audio.music_source->stream, &length);
+  return length * 1000.0 / music_sample_rate(audio);
+}
+
 f64 music_position(const Audio& audio) {
   if (!audio.music_loaded)
     return 0;

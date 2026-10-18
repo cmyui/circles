@@ -45,7 +45,7 @@ Rect button_rect(const App& app, size_t row, size_t column) {
 // Reset, then close.
 Rect action_rect(const App& app, i32 index) {
   const Rect    panel = panel_rect(app);
-  constexpr f32 kWidth = 170, kHeight = 48;
+  constexpr f32 kWidth = 230, kHeight = 48;
   return {panel.x + panel.w - 2 * (kWidth + 16) + index * (kWidth + 16),
           panel.y + panel.h - kHeight - 22, kWidth, kHeight};
 }
@@ -65,6 +65,8 @@ i32 button_at(const App& app, Vec2 point) {
 }
 
 const ModButton* button_by_index(i32 index) {
+  if (index < 0)
+    return nullptr;
   for (const ModRow& row : mod_rows()) {
     if (index < static_cast<i32>(row.buttons.size()))
       return &row.buttons[index];
@@ -209,7 +211,8 @@ void mod_select_draw(App& app) {
     }
   }
 
-  const char* labels[] = {"Reset  (1)", "Close  (Esc)"};
+  // Numbered for their keys, as in osu!.
+  const char* labels[] = {"1. Reset all mods", "2. Close"};
   const Color accents[] = {hex_color(0xCC6633), hex_color(0x6655CC)};
   for (i32 i = 0; i < 2; ++i) {
     Rect b = action_rect(app, i);

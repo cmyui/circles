@@ -2,6 +2,8 @@
 
 #include <circles/audio.h>
 #include <circles/gfx.h>
+#include <circles/health.h>
+#include <circles/hit_objects.h>
 #include <circles/hitsounds.h>
 #include <circles/library.h>
 #include <circles/math.h>
@@ -19,6 +21,7 @@
 #include <deque>
 #include <future>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -27,67 +30,45 @@ namespace circles {
 
 enum class Screen : u8 { MainMenu, SongSelect, Gameplay, Results };
 
-enum class ObjectKind : u8 { Circle, Slider, Spinner };
-
-// A hit object prepared for play. Positions are osu! pixels with stacking
-// applied; times are ms.
-struct GameObject {
-  ObjectKind        kind;
-  f64               time;
-  f64               end_time;
-  Vec2              position;
-  Vec2              end_position;  // where a slider finishes, after its repeats
-  i32               combo_number;
-  i32               colour;  // index into Gameplay::combo_colours
-  bool              new_combo;
-  Hitsound          hitsound;
-  f32               volume;  // 0 to 1, from the timing point at `time`
+// An object's progress in play, as osu!stable tracks it.
+struct ObjectState {
+  // Stable's IsHit: the whole object has been judged.
+  bool      hit = false;
+  Judgement result = Judgement::None;
+  f64       result_time = 0;
+  Judgement head = Judgement::None;  // a circle, or a slider's head
+  f64       head_time = 0;
+  f64       shake_time = -1e9;  // when a blocked press last shook it
 
   // Sliders
-  u32               slider = fosu::HitObject::kNoSlider;  // into map arrays
-  i32               slides = 1;
-  f64               span_duration = 0;
-  std::vector<Vec2> path;                // evenly spaced points along the body
-  std::vector<Hitsound> edge_hitsounds;  // the head, each repeat, then the end
-
-  // Spinners
-  i32                   required_spins = 0;
-};
-
-struct ObjectState {
-  Judgement head = Judgement::None;  // a circle or slider head
-  f64       head_time = 0;
-  Judgement result = Judgement::None;  // the whole object
-  f64       result_time = 0;
-
-  // Sliders: the head, ticks, repeats and end are its parts.
-  size_t    next_event = 1;  // into the map's slider events; 0 is the head
-  i32       parts_hit = 0;
-  i32       parts_total = 0;
-  bool      tracking = false;
+  i32       points_hit = 0;  // ticks, repeats and end followed
+  i32       points_missed = 0;
+  bool      tracking = false;  // stable's IsSliding
   f64       tracking_changed = -1e9;
-  // osu! judges a slider's end slightly early but sounds it on time.
-  bool      end_hit = false;
+  i32       init_time = 0;      // when tracking last began
+  u8        down_button = 0;    // the side holding it: 1 left, 2 right
+  i32       last_sounded = -1;  // the last point whose sound played
 
   // Spinners
-  f32       rotation = 0;  // radians, signed
-  f32       last_angle = 0;
-  bool      has_angle = false;
-  i32       spins_scored = 0;
-  f32       rpm = 0;
+  f32       half_turns = 0;  // stable's floatRotationCount
+  i32       last_half_turns = 0;
+  i32       scored_turns = 0;  // stable's scoringRotationCount
+  f64       velocity = 0;      // radians per ms, eased toward the target
+  f64       target_velocity = 0;
+  i32       zero_count = 0;
+  f64       last_angle = 0;
+  f64       frame_variance = 1000.0 / 60;
+  f32       rotation = 0;  // the spinner's drawn angle
+  f64       rpm = 0;
   f64       bonus_time = -1e9;
-};
-
-// A hit key press on the gameplay clock.
-struct Press {
-  f64  time;
-  Vec2 cursor;  // window points
+  i32       bonus = 0;  // the bonus shown
 };
 
 struct Popup {
   f64       time;
   Vec2      position;
   Judgement judgement;
+  f32       tilt = 0;  // a miss's random rotation, radians
 };
 
 struct HitError {
@@ -108,59 +89,89 @@ struct TrailPoint {
 enum HitKey : u8 { kKey1, kKey2, kMouse1, kMouse2, kHitKeyCount };
 
 struct Gameplay {
-  Mods                          mods = 0;
-  f64                           rate = 1;  // song speed from the mods
+  Mods                           mods = 0;
+  f64                            rate = 1;  // song speed from the mods
   // The map stays parsed for its slider events and breaks.
-  std::unique_ptr<fosu::Parser> parser;
-  const fosu::Beatmap*          map = nullptr;
-  i32                           map_index = -1;
-  std::vector<GameObject>       objects;
-  std::vector<ObjectState>      states;
-  std::vector<Color>            combo_colours;
-  f64                           radius = 0;
-  f64                           preempt = 0;
-  f64                           fade_in = 0;
-  HitWindows                    windows{};
-  f64                           hp = 0;
+  std::unique_ptr<fosu::Parser>  parser;
+  const fosu::Beatmap*           map = nullptr;
+  i32                            map_index = -1;
+  std::vector<GameObject>        objects;
+  std::vector<ObjectState>       states;
+  std::vector<Color>             combo_colours;
+  f64                            radius = 0;
+  f64                            preempt = 0;
+  f64                            fade_in = 0;
+  HitWindows                     windows{};
+  f64                            hp_setting = 0;  // the map's HP, after mods
+  std::vector<fosu::TimingPoint> timing;          // sorted as stable sorts them
+  std::vector<fosu::Break>       breaks;          // as stable keeps them
+  SampleSet                      default_sample_set = SampleSet::Normal;
   // Score V1's combo bonus scales by score_multiplier: the map's difficulty
   // times the mods' multiplier. Score V2 scales by the mods' alone.
-  f64                           score_multiplier = 1;
-  f64                           mod_multiplier = 1;
-  f64                           end_time = 0;  // when the last object ends
+  f64                            score_multiplier = 1;
+  f64                            mod_multiplier = 1;
+  f64                            end_time = 0;  // when the last object ends
 
   // The clock follows the music: audio time is clock_time plus the wall time
   // since clock_wall.
-  f64                           clock_time = 0;
-  f64                           clock_wall = 0;
-  // The music's position settles shortly after starting or seeking.
-  f64                           resync_after = 0;
-  bool                          audio_ok = false;
-  bool                          audio_started = false;
+  f64                            clock_time = 0;
+  f64                            clock_synced = 0;  // wall seconds
+  // Skipping the intro is offered until this time.
+  std::optional<i32>             skip_boundary;
+  i32    lead_frame_time = -1;  // a replay's second frame, as stable records it
+  bool   audio_ok = false;
+  bool   audio_started = false;
   f64    time = 0;  // gameplay time this frame: audio time minus the offset
+  // Stable's game loop runs in whole ms: the last frame's time, and the last
+  // of its 60 Hz "scorable" frames.
+  i32    step_time = 0;
+  bool   stepped = false;
+  i32    last_scorable_time = 0;
+  f64    sixty_last = 0;  // wall ms of the last 60 Hz frame
+  i32    active = -1;     // the slider or spinner being scored, if any
 
   i64    score = 0;
   f64    displayed_score = 0;
   i32    combo = 0;
   i32    max_combo = 0;
   Counts counts;
-  f64    health = 1;
-  f32    displayed_health = 1;
+  // Health in stable's units, 0 to 200, and its rules for this map: passive
+  // drain per ms, and multipliers on what hits restore.
+  f64    health = kHealthMax;
+  HealthRules     health_rules;
+  bool            draining = false;
+  i32             resume_after_break = -1;
+  std::deque<i32> drain_stops;  // where drain pauses before each break
+  bool            before_gameplay = true;
+  bool            after_gameplay = false;
+  f32             displayed_health = 1;  // 0 to 1, for the bar
+  f64             recovery_display = 0;  // the bar refilling in Easy's revive
+  // Hits within the current combo below 300, for its end-of-combo bonus.
+  i32             combo_katu = 0;
+  i32             combo_bad = 0;
+  bool            outro = false;  // the song has ended; presses no longer count
   // Score V2's tallies; see update_score_v2.
-  f64    combo_portion = 0;
-  f64    combo_portion_max = 1;  // a perfect play's
-  f64    bonus_portion = 0;
-  i32    recoveries = 0;  // Easy's revives left
-  bool   death = false;   // Sudden Death or Perfect was broken
+  f64             combo_portion = 0;
+  f64             bonus_portion = 0;
+  i32             recoveries = 0;  // Easy's revives left
   std::vector<f64>         offsets;
   std::vector<HitError>    recent_errors;
   std::vector<Popup>       popups;
   f64                      combo_changed = -1e9;  // wall seconds
-  size_t                   judged = 0;
   size_t                   first_active = 0;
 
   bool                     held[kHitKeyCount] = {};
   i32                      press_counts[kHitKeyCount] = {};
-  std::vector<Press>       pending;
+  // Stable's two sides: left is key 1 or mouse 1, right key 2 or mouse 2.
+  bool                     left = false;
+  bool                     right = false;
+  u8                       down_sides = 0;  // 1 left, 2 right
+  u8                       last_sides = 0;
+  u8                       last_sides2 = 0;
+  bool                     game_down = false;
+  bool                     press_left = false;  // this frame's new presses
+  bool                     press_right = false;
+  bool                     force_frame = false;  // record this frame
 
   // Every play records its input as replay frames. Watching a replay plays
   // its frames back instead of taking input.
@@ -168,7 +179,8 @@ struct Gameplay {
   bool                     watching = false;
   std::string              replay_path;  // the replay being watched
   std::string              replay_player;
-  size_t                   next_frame = 0;  // watching: the next to apply
+  size_t                   next_frame = 0;   // watching: the next to apply
+  f64                      replay_tick = 0;  // watching: the next 60 Hz frame
   // The cursor that hits, in window points: the mouse's, the replay's or
   // Autopilot's.
   Vec2                     cursor{};
@@ -185,8 +197,7 @@ struct Gameplay {
   f64                      phase_changed = 0;  // wall seconds
   i32                      menu_selection = -1;
   f32                      dim = 0.8f;
-  bool                     finished = false;
-  f64                      finished_at = 0;
+  bool                     finished = false;  // passed; results follow
 };
 
 struct Results {

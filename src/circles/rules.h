@@ -20,13 +20,25 @@ inline constexpr f32 kPlayfieldHeight = 384;
 // Presses earlier than this before an object are ignored rather than missed.
 inline constexpr f64 kMissWindow = 400;
 
+// osu!stable's interpolation of a difficulty setting: `mid` at 5, `min` at
+// 0 and `max` at 10.
+inline f64 map_difficulty_range(f64 difficulty, f64 min, f64 mid, f64 max) {
+  if (difficulty > 5)
+    return mid + (max - mid) * (difficulty - 5) / 5;
+  if (difficulty < 5)
+    return mid - (mid - min) * (5 - difficulty) / 5;
+  return mid;
+}
+
+// Stable widens circles by a hair to make up for an old rounding error.
 inline f64 circle_radius(f64 cs) {
-  return 54.4 - 4.48 * cs;
+  return (54.4 - 4.48 * cs) * 1.00041;
 }
 
 // How long before its time an object appears.
+// Whole ms, as osu!stable truncates it.
 inline f64 approach_preempt(f64 ar) {
-  return ar < 5 ? 1200 + 600 * (5 - ar) / 5 : 1200 - 750 * (ar - 5) / 5;
+  return std::trunc(map_difficulty_range(ar, 1800, 1200, 450));
 }
 
 // How long an appearing object takes to become opaque.
@@ -60,27 +72,16 @@ inline Judgement judge_press(const HitWindows& windows, f64 offset) {
   return Judgement::Miss;
 }
 
-// osu!stable's turns per second to clear a spinner.
-inline f64 spins_per_second(f64 od) {
-  return od < 5 ? 3 + 0.4 * od : 2.5 + 0.5 * od;
-}
-
-// Turns are counted continuously, as osu!lazer does, which counts more
-// strictly than stable; lazer's 0.6 factor keeps the requirement comparable.
-inline i32 required_spins(f64 duration, f64 od) {
-  return std::max(
-      1, static_cast<i32>(duration / 1000 * 0.6 * spins_per_second(od)));
-}
-
-inline Judgement spinner_judgement(f64 turns, i32 required) {
-  const f64 completion = turns / required;
-  if (completion >= 1)
+// osu!stable counts spinners in half turns: `required` earns a 50, one more
+// a 100 and two more a 300.
+inline Judgement spinner_judgement(i32 half_turns, i32 required) {
+  if (half_turns <= required - 1)
+    return Judgement::Miss;
+  if (half_turns > required + 1)
     return Judgement::Hit300;
-  if (completion >= 0.9)
+  if (half_turns > required)
     return Judgement::Hit100;
-  if (completion >= 0.75)
-    return Judgement::Hit50;
-  return Judgement::Miss;
+  return Judgement::Hit50;
 }
 
 // A slider is judged by the fraction of its head, ticks, repeats and end that
@@ -108,17 +109,20 @@ inline i32 judgement_value(Judgement judgement) {
   }
 }
 
-// osu!stable's score multiplier from the map's settings and object density.
-// It rounds halves to even, as .NET does.
+// osu!stable's score multiplier from the map's settings and object density,
+// in its single-precision arithmetic, rounding halves to even as .NET does.
 inline f64 difficulty_multiplier(f64    hp,
                                  f64    cs,
                                  f64    od,
                                  size_t objects,
                                  i32    drain_seconds) {
-  const f64 density =
-      drain_seconds > 0 ? static_cast<f64>(objects) / drain_seconds : 1e9;
-  return std::nearbyint((hp + cs + od + std::clamp(density * 8, 0.0, 16.0)) /
-                        38 * 5);
+  const f32 density = std::clamp(
+      static_cast<f32>(objects) / static_cast<f32>(drain_seconds) * 8.0f, 0.0f,
+      16.0f);
+  const f32 points = (static_cast<f32>(hp) + static_cast<f32>(od) +
+                      static_cast<f32>(cs) + density) /
+                     38.0f * 5.0f;
+  return std::nearbyint(static_cast<f64>(points));
 }
 
 // Score for a judgement, growing with the combo before it, as osu!stable
@@ -126,7 +130,7 @@ inline f64 difficulty_multiplier(f64    hp,
 inline i64 hit_score(Judgement judgement, i32 combo, f64 multiplier) {
   const i32 value = judgement_value(judgement);
   return value +
-         static_cast<i64>(value * std::max(combo - 1, 0) * multiplier / 25);
+         static_cast<i64>(std::max(combo - 1, 0) * ((value / 25) * multiplier));
 }
 
 struct Counts {
@@ -134,28 +138,37 @@ struct Counts {
   i32 hit100 = 0;
   i32 hit50 = 0;
   i32 miss = 0;
+  // Combo-ending 300s with no 100s or worse in their combo, and those with
+  // only 100s; replays record them.
+  i32 geki = 0;
+  i32 katu = 0;
 
   i32 total() const { return hit300 + hit100 + hit50 + miss; }
 };
 
-// 0 to 1.
-inline f64 accuracy(const Counts& counts) {
+// 0 to 1, in single precision as osu!stable keeps it.
+inline f32 accuracy(const Counts& counts) {
   if (!counts.total())
     return 1;
-  return (300.0 * counts.hit300 + 100.0 * counts.hit100 + 50.0 * counts.hit50) /
-         (300.0 * counts.total());
+  return static_cast<f32>(counts.hit50 * 50 + counts.hit100 * 100 +
+                          counts.hit300 * 300) /
+         (counts.total() * 300);
 }
 
 enum class Grade : u8 { SS, S, A, B, C, D };
 
+// osu!stable's grades, with its single-precision ratios: exactly 80% 300s
+// counts as more than 80%. Nothing judged is a D.
 inline Grade grade(const Counts& counts) {
   const i32 total = counts.total();
-  if (!total || counts.hit300 == total)
-    return Grade::SS;
-  const f64  ratio300 = static_cast<f64>(counts.hit300) / total;
-  const f64  ratio50 = static_cast<f64>(counts.hit50) / total;
+  if (!total)
+    return Grade::D;
+  const f64  ratio300 = static_cast<f32>(counts.hit300) / total;
+  const f64  ratio50 = static_cast<f32>(counts.hit50) / total;
   const bool clean = counts.miss == 0;
-  if (ratio300 > 0.9 && ratio50 < 0.01 && clean)
+  if (ratio300 == 1)
+    return Grade::SS;
+  if (ratio300 > 0.9 && ratio50 <= 0.01 && clean)
     return Grade::S;
   if ((ratio300 > 0.8 && clean) || ratio300 > 0.9)
     return Grade::A;

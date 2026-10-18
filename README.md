@@ -4,6 +4,12 @@ An osu!-style rhythm game in C++20 and OpenGL that plays real osu!standard
 beatmaps, parsed with
 [fosu](https://github.com/cmyui/fast-osu-beatmap-parser).
 
+Gameplay follows osu!stable's own code. fosu's stable mode works out
+stable's slider paths, timing and stacking; input and note lock, hit
+windows, slider and spinner scoring, combo, health, and score are ported
+here. Plays score as they would there, and stable replays play back with
+the same judgements.
+
 ## Build and run
 
 macOS only: rendering uses Apple's OpenGL 4.1 headers. Needs CMake, GLFW and
@@ -91,7 +97,6 @@ and F2 for a random song.
 - Without a skin, hitsounds are synthesized. Beatmaps' own hitsound samples,
   storyboards and videos are ignored.
 - Skins don't restyle the menus, song select, pause screen or input overlay.
-- Spinners count full turns, as osu!lazer does, rather than osu!stable's half
-  turns, so spinner scores differ slightly from stable's.
-- Scoring follows osu!stable's score formula; health is a simplified version
-  of osu!'s.
+- osu!stable scores a replay's spinners partly on its own display frames, so
+  watching a stable replay can differ from stable by a spinner bonus.
+- There are no per-beatmap offsets; `-` and `=` set one global offset.

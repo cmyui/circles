@@ -56,6 +56,8 @@ static void test_buttons_cycle_and_turn_off_conflicting_mods() {
   // Some special mods do combine.
   CHECK_EQ(press_mod_button(kRelax, button('C')), kRelax | kSpunOut);
   CHECK_EQ(press_mod_button(kNoFail, button('V')), kNoFail | kAutoplay);
+  // Auto overrules mods that would play for it.
+  CHECK_EQ(press_mod_button(kAutoplay, button('Z')), kAutoplay);
 }
 
 static void test_score_multipliers_combine() {
