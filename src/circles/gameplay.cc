@@ -1874,6 +1874,7 @@ bool gameplay_start(App& app, i32 map_index, std::string replay_path) {
   if (!load_gameplay(app, map_index, std::move(replay_path), true))
     return false;
   auto& game = app.game;
+  game.dim = app.background_dim;
   if (game.audio_ok) {
     music_pause(app.audio);
     music_set_rate(app.audio, game.rate, !mods_change_pitch(game.mods));
@@ -1943,23 +1944,43 @@ void gameplay_update(App& app) {
     game.time = now;
     follow_replay_cursor(app);
   } else {
-    const Vec2 cursor = live_cursor(app, now);
-    game.cursor = playfield(app).to_screen(cursor);
-    if (game.mods & kAutopilot)
-      game.replay_trail.push_back({app.now, game.cursor});
-    const bool scorable = sixty_hz_frame(app);
-    const u32  keys = replay_keys(game);
-    outcome = play_step(app, now, cursor, keys, scorable);
     // As stable records: a frame each 60th of a second, and whenever the
     // keys change or something scores.
-    if (game.audio_started || !game.audio_ok) {
+    const auto record = [&](i32 time, Vec2 cursor, u32 keys, bool scorable) {
+      if (!game.audio_started && game.audio_ok)
+        return;
       if (scorable || game.force_frame || game.frames.empty() ||
           keys != game.frames.back().keys)
         game.frames.push_back(
-            {std::max<f64>(now,
-                           game.frames.empty() ? now : game.frames.back().time),
+            {std::max<f64>(
+                 time, game.frames.empty() ? time : game.frames.back().time),
              cursor, keys});
       game.force_frame = false;
+    };
+    // Stable reads the keys held at each frame. Here each press and release
+    // counts when it happened, by macOS's timestamp: judging steps to that
+    // moment, between frames, before the frame's own step.
+    const i32 earliest = game.stepped ? std::min(game.step_time, now) : now;
+    for (const auto& input : game.pending_keys) {
+      const i32 ago = static_cast<i32>(
+          std::lround(std::max(0.0, app.now - input.wall) * 1000 * game.rate));
+      const i32  time = std::max(earliest, now - ago);
+      const Vec2 at = live_cursor(app, time);
+      outcome = play_step(app, time, at, input.keys, false);
+      record(time, at, input.keys, false);
+      if (outcome != StepOutcome::Continue)
+        break;
+    }
+    game.pending_keys.clear();
+    if (outcome == StepOutcome::Continue) {
+      const Vec2 cursor = live_cursor(app, now);
+      game.cursor = playfield(app).to_screen(cursor);
+      if (game.mods & kAutopilot)
+        game.replay_trail.push_back({app.now, game.cursor});
+      const bool scorable = sixty_hz_frame(app);
+      const u32  keys = replay_keys(game);
+      outcome = play_step(app, now, cursor, keys, scorable);
+      record(now, cursor, keys, scorable);
     }
   }
   switch (outcome) {
@@ -1989,7 +2010,11 @@ void gameplay_update(App& app) {
   game.displayed_health =
       approach(game.displayed_health,
                static_cast<f32>(game.health / kHealthMax), 10, app.dt);
-  game.dim = approach(game.dim, in_break(game) ? 0.5f : 0.8f, 3, app.dt);
+  // Breaks show the background more, unless it's hidden.
+  const f32 dim = app.background_dim;
+  game.dim =
+      approach(game.dim, in_break(game) && dim < 1 ? std::min(dim, 0.5f) : dim,
+               3, app.dt);
   std::erase_if(game.popups, [&](const Popup& popup) {
     return game.time - popup.time > kPopupDuration;
   });
@@ -2055,14 +2080,15 @@ void gameplay_draw(App& app) {
   draw_game_overlays(app);
 }
 
-void gameplay_key(App& app, i32 key, i32 action, f64 /*wall*/) {
+void gameplay_key(App& app, i32 key, i32 action, f64 wall) {
   auto& game = app.game;
   if (key == GLFW_KEY_Z || key == GLFW_KEY_X) {
-    // The game reads which keys are held each frame, as stable does.
     if (action != GLFW_REPEAT && !game.watching) {
       const i32 hit_key = key == GLFW_KEY_Z ? kKey1 : kKey2;
       game.press_counts[hit_key] += action == GLFW_PRESS;
       game.held[hit_key] = action == GLFW_PRESS;
+      if (game.phase == GamePhase::Playing)
+        game.pending_keys.push_back({wall, replay_keys(game)});
     }
     return;
   }
@@ -2104,7 +2130,7 @@ void gameplay_key(App& app, i32 key, i32 action, f64 /*wall*/) {
   }
 }
 
-void gameplay_click(App& app, i32 button, i32 action, f64 /*wall*/) {
+void gameplay_click(App& app, i32 button, i32 action, f64 wall) {
   auto&      game = app.game;
   const bool hit_button =
       button == GLFW_MOUSE_BUTTON_LEFT || button == GLFW_MOUSE_BUTTON_RIGHT;
@@ -2116,6 +2142,8 @@ void gameplay_click(App& app, i32 button, i32 action, f64 /*wall*/) {
     const i32 hit_key = button == GLFW_MOUSE_BUTTON_LEFT ? kMouse1 : kMouse2;
     game.press_counts[hit_key] += action == GLFW_PRESS;
     game.held[hit_key] = action == GLFW_PRESS;
+    if (game.phase == GamePhase::Playing)
+      game.pending_keys.push_back({wall, replay_keys(game)});
   }
   const bool menu =
       game.phase == GamePhase::Paused || game.phase == GamePhase::Failed;

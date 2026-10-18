@@ -47,6 +47,7 @@ add_library(circles_core STATIC
   src/circles/profiler_macos.mm
   src/circles/replay.cc
   src/circles/results.cc
+  src/circles/settings_menu.cc
   src/circles/skin.cc
   src/circles/song_select.cc
   src/circles/stretch.cc

@@ -40,6 +40,8 @@ struct Settings {
   std::string skin;  // folder name in skins/; empty for the built-in look
   bool        mouse_buttons = true;
   Mods        mods = 0;
+  f32         background_dim = 0.8f;
+  bool        frame_cap = true;
 };
 
 Settings load_settings() {
@@ -62,6 +64,11 @@ Settings load_settings() {
       settings.mouse_buttons = std::strtol(value, nullptr, 10) != 0;
     else if (key == "mods")
       settings.mods = static_cast<Mods>(std::strtoul(value, nullptr, 10));
+    else if (key == "frame_cap")
+      settings.frame_cap = std::strtol(value, nullptr, 10) != 0;
+    else if (key == "background_dim")
+      settings.background_dim =
+          std::clamp(static_cast<f32>(std::strtod(value, nullptr)), 0.0f, 1.0f);
   }
   return settings;
 }
@@ -374,6 +381,8 @@ void draw_profiler_overlay(App& app) {
 
 void draw_overlays(App& app) {
   auto& r = app.renderer;
+  if (app.settings_menu.open)
+    settings_draw(app);
   if (app.profiler.active && app.profiler.overlay)
     draw_profiler_overlay(app);
   if (app.now - app.toast_time < kToastDuration) {
@@ -441,6 +450,8 @@ bool app_init(App& app) {
   app.audio_offset = settings.audio_offset;
   app.mouse_buttons = settings.mouse_buttons;
   app.mods = settings.mods;
+  app.background_dim = settings.background_dim;
+  app.frame_cap = settings.frame_cap;
   set_master_volume(app.audio, settings.volume);
   const i32 imported =
       static_cast<i32>(import_archives(kBeatmapDirectory, ".osz").size());
@@ -549,7 +560,27 @@ void app_shutdown(App& app) {
   glfwTerminate();
 }
 
+// When the input being handled happened, on glfwGetTime's clock: macOS's own
+// timestamp for it, rather than when this frame's poll got to it.
+f64 input_time() {
+  const f64 now = glfwGetTime();
+  const f64 event = last_input_event_time();
+  return event < 0 ? now : std::min(now, event + (now - uptime()));
+}
+
 void app_key(App& app, i32 key, i32 action) {
+  const bool control =
+      glfwGetKey(app.window, GLFW_KEY_LEFT_CONTROL) == GLFW_PRESS ||
+      glfwGetKey(app.window, GLFW_KEY_RIGHT_CONTROL) == GLFW_PRESS;
+  if (key == GLFW_KEY_O && control && action == GLFW_PRESS &&
+      app.screen != Screen::Gameplay) {
+    toggle_settings(app);
+    return;
+  }
+  if (app.settings_menu.open) {
+    settings_key(app, key, action);
+    return;
+  }
   if (key == GLFW_KEY_F8 && action == GLFW_PRESS) {
     toggle_profiling(app);
     return;
@@ -595,7 +626,7 @@ void app_key(App& app, i32 key, i32 action) {
       select_key(app, key, action);
       break;
     case Screen::Gameplay:
-      gameplay_key(app, key, action, glfwGetTime());
+      gameplay_key(app, key, action, input_time());
       break;
     case Screen::Results:
       results_key(app, key, action);
@@ -604,11 +635,16 @@ void app_key(App& app, i32 key, i32 action) {
 }
 
 void app_char(App& app, u32 codepoint) {
-  if (accepting_input(app) && app.screen == Screen::SongSelect)
+  if (accepting_input(app) && !app.settings_menu.open &&
+      app.screen == Screen::SongSelect)
     select_char(app, codepoint);
 }
 
 void app_mouse_button(App& app, i32 button, i32 action) {
+  if (app.settings_menu.open) {
+    settings_click(app, button, action);
+    return;
+  }
   if (!accepting_input(app))
     return;
   switch (app.screen) {
@@ -619,7 +655,7 @@ void app_mouse_button(App& app, i32 button, i32 action) {
       select_click(app, button, action);
       break;
     case Screen::Gameplay:
-      gameplay_click(app, button, action, glfwGetTime());
+      gameplay_click(app, button, action, input_time());
       break;
     case Screen::Results:
       results_click(app, button, action);
@@ -634,13 +670,15 @@ void app_scroll(App& app, f64 dy) {
                    glfwGetKey(app.window, GLFW_KEY_RIGHT_ALT) == GLFW_PRESS;
   if (alt || app.screen == Screen::MainMenu)
     change_volume(app, dy);
-  else if (accepting_input(app) && app.screen == Screen::SongSelect)
+  else if (accepting_input(app) && !app.settings_menu.open &&
+           app.screen == Screen::SongSelect)
     select_scroll(app, dy);
 }
 
 void app_cursor(App& app, f64 x, f64 y) {
   app.cursor = {static_cast<f32>(x), static_cast<f32>(y)};
   app.trail.push_back({glfwGetTime(), app.cursor});
+  settings_cursor(app);
 }
 
 void app_focus(App& app, bool focused) {
@@ -707,19 +745,29 @@ void play_preview(App& app) {
 void draw_backdrop(App& app, f32 dim, f32 parallax) {
   auto&       r = app.renderer;
   const auto& backdrop = app.backdrop;
-  draw_rect(r, 0, 0, app.width, app.height, kBlack);
+  const f32   appear =
+      clamp01(static_cast<f32>((app.now - backdrop.changed) / kBackdropFade));
+  // Each full-screen layer costs the GPU, so only what shows is drawn: the
+  // dim tints the images rather than covering them, and an image that has
+  // faded in hides the black and the image before it.
+  const bool previous_shows = appear < 1 && backdrop.previous.id;
+  const bool covered =
+      dim < 1 && ((backdrop.current.id && appear >= 1) || previous_shows);
+  if (!covered)
+    draw_rect(r, 0, 0, app.width, app.height, kBlack);
+  if (dim >= 1)
+    return;
   const f32 zoom = 1 + 0.03f * parallax;
   const f32 shift_x =
       -parallax * std::clamp(app.cursor.x / app.width * 2 - 1, -1.0f, 1.0f);
   const f32 shift_y =
       -parallax * std::clamp(app.cursor.y / app.height * 2 - 1, -1.0f, 1.0f);
-  const f32 appear =
-      clamp01(static_cast<f32>((app.now - backdrop.changed) / kBackdropFade));
-  draw_image_cover(r, backdrop.previous, 0, 0, app.width, app.height, kWhite,
-                   zoom, shift_x, shift_y);
+  const Color tint{1 - dim, 1 - dim, 1 - dim, 1};
+  if (previous_shows)
+    draw_image_cover(r, backdrop.previous, 0, 0, app.width, app.height, tint,
+                     zoom, shift_x, shift_y);
   draw_image_cover(r, backdrop.current, 0, 0, app.width, app.height,
-                   fade(kWhite, appear), zoom, shift_x, shift_y);
-  draw_rect(r, 0, 0, app.width, app.height, fade(kBlack, dim));
+                   fade(tint, appear), zoom, shift_x, shift_y);
 }
 
 void show_toast(App& app, std::string text) {
@@ -735,6 +783,8 @@ void save_settings(const App& app) {
        << '\n';
   file << "mouse_buttons=" << app.mouse_buttons << '\n';
   file << "mods=" << app.mods << '\n';
+  file << "background_dim=" << app.background_dim << '\n';
+  file << "frame_cap=" << app.frame_cap << '\n';
 }
 
 std::string save_replay(App& app, i32 map, Replay replay) {

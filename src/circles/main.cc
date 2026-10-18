@@ -91,11 +91,12 @@ int main(int argc, char** argv) {
     return 1;
   }
 
-  // GLFW delivers input when a frame polls for it, so a hit's time is only as
-  // precise as the frame rate. Frames run up to 1000 per second, sleeping
-  // between them rather than spinning a core.
-  const auto frame_interval =
-      std::chrono::microseconds(options.uncapped ? 0 : 1000);
+  // Frames run up to 1000 per second, sleeping between them rather than
+  // spinning a core, unless the cap is turned off in settings (or for a
+  // benchmark, --uncapped). Presses are judged by their own timestamps, so
+  // the frame rate doesn't limit their precision.
+  if (options.uncapped)
+    app->frame_cap = false;
   auto  next_frame = std::chrono::steady_clock::now();
   auto& profiler = app->profiler;
   using circles::FramePhase;
@@ -107,7 +108,7 @@ int main(int argc, char** argv) {
     circles::app_frame(*app, glfwGetTime());
     glfwSwapBuffers(window);
     circles::profile_phase(profiler, FramePhase::Swap);
-    next_frame += frame_interval;
+    next_frame += std::chrono::microseconds(app->frame_cap ? 1000 : 0);
     const auto now = std::chrono::steady_clock::now();
     if (next_frame < now)
       next_frame = now;

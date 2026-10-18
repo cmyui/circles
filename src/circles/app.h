@@ -155,13 +155,20 @@ struct Gameplay {
   f64             combo_portion = 0;
   f64             bonus_portion = 0;
   i32             recoveries = 0;  // Easy's revives left
-  std::vector<f64>         offsets;
-  std::vector<HitError>    recent_errors;
-  std::vector<Popup>       popups;
-  f64                      combo_changed = -1e9;  // wall seconds
-  size_t                   first_active = 0;
+  std::vector<f64>      offsets;
+  std::vector<HitError> recent_errors;
+  std::vector<Popup>    popups;
+  f64                   combo_changed = -1e9;  // wall seconds
+  size_t                first_active = 0;
 
-  bool                     held[kHitKeyCount] = {};
+  bool                  held[kHitKeyCount] = {};
+  // Presses and releases since the last frame: when they happened (wall
+  // seconds) and the keys held after each, as replay bits.
+  struct TimedKeys {
+    f64 wall;
+    u32 keys;
+  };
+  std::vector<TimedKeys>   pending_keys;
   i32                      press_counts[kHitKeyCount] = {};
   // Stable's two sides: left is key 1 or mouse 1, right key 2 or mouse 2.
   bool                     left = false;
@@ -321,24 +328,35 @@ struct App {
   // Whether mouse buttons hit in gameplay. Tablet players who tap keys turn
   // them off so pen taps don't count.
   bool                     mouse_buttons = true;
+  // Gameplay's background dim, 0 to 1; 1 hides the background.
+  f32                      background_dim = 0.8f;
+  // Frames sleep to run at most 1000 per second, rather than as fast as
+  // they can.
+  bool                     frame_cap = true;
+  struct SettingsMenu {
+    bool open = false;
+    f64  changed = -1e9;  // wall seconds
+    bool dragging = false;
+    i32  selected = 0;  // the row the keys change
+  } settings_menu;
 
-  MainMenu                 menu;
-  SongSelect               select;
-  Gameplay                 game;
-  Results                  results;
+  MainMenu               menu;
+  SongSelect             select;
+  Gameplay               game;
+  Results                results;
 
-  Vec2                     cursor{};
-  std::deque<TrailPoint>   trail;
-  std::vector<Vec2>        scratch;  // a slider body's points this frame
-  bool                     fullscreen = false;
-  i32                      windowed[4] = {};  // x, y, width, height to restore
+  Vec2                   cursor{};
+  std::deque<TrailPoint> trail;
+  std::vector<Vec2>      scratch;  // a slider body's points this frame
+  bool                   fullscreen = false;
+  i32                    windowed[4] = {};  // x, y, width, height to restore
 
-  i32                      fps = 0;
-  i32                      fps_frames = 0;
-  f64                      fps_window_start = 0;
-  std::string              toast;
-  f64                      toast_time = -1e9;
-  bool                     quit = false;
+  i32                    fps = 0;
+  i32                    fps_frames = 0;
+  f64                    fps_window_start = 0;
+  std::string            toast;
+  f64                    toast_time = -1e9;
+  bool                   quit = false;
 };
 
 // app.cc
@@ -467,6 +485,13 @@ void gameplay_draw(App& app);
 void gameplay_key(App& app, i32 key, i32 action, f64 wall);
 void gameplay_click(App& app, i32 button, i32 action, f64 wall);
 void gameplay_focus_lost(App& app);
+
+// settings_menu.cc
+void toggle_settings(App& app);
+void settings_key(App& app, i32 key, i32 action);
+void settings_click(App& app, i32 button, i32 action);
+void settings_cursor(App& app);
+void settings_draw(App& app);
 
 // results.cc
 // Shows a saved score's results, its hit errors from judging its replay.

@@ -8,6 +8,8 @@ namespace circles {
 
 namespace {
 
+f64 last_event_time = -1;
+
 bool classify(NSEvent* event, InputKind& kind, InputDevice& device) {
   device = InputDevice::Mouse;
   switch (event.type) {
@@ -61,9 +63,14 @@ void install_input_monitor(Profiler& profiler) {
                                         handler:^NSEvent*(NSEvent* event) {
                                           InputKind   kind;
                                           InputDevice device;
+                                          if (!classify(event, kind, device))
+                                            return event;
+                                          // Seen before GLFW's callback for
+                                          // the same event.
+                                          if (kind != InputKind::Move)
+                                            last_event_time = event.timestamp;
                                           if (target->active &&
-                                              target->in_frame &&
-                                              classify(event, kind, device)) {
+                                              target->in_frame) {
                                             target->inputs.push_back(
                                                 {event.timestamp, uptime(),
                                                  static_cast<u32>(
@@ -73,6 +80,10 @@ void install_input_monitor(Profiler& profiler) {
                                           }
                                           return event;
                                         }];
+}
+
+f64 last_input_event_time() {
+  return last_event_time;
 }
 
 void set_mouse_coalescing(bool enabled) {

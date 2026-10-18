@@ -76,6 +76,10 @@ void profile_gpu_begin(Profiler& profiler);
 void profile_gpu_end(Profiler& profiler);
 void profile_frame_end(Profiler& profiler, u32 draw_calls, u32 vertices);
 
+// macOS's timestamp (uptime seconds) for the key or button event being
+// handled, or a negative value before any.
+f64 last_input_event_time();
+
 // Platform glue (profiler_macos.mm).
 void install_input_monitor(Profiler& profiler);
 void set_mouse_coalescing(bool enabled);
