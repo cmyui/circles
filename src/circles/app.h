@@ -195,6 +195,7 @@ struct Gameplay {
 
   GamePhase                phase = GamePhase::Playing;
   f64                      phase_changed = 0;  // wall seconds
+  f64                      started = 0;        // wall seconds
   i32                      menu_selection = -1;
   f32                      dim = 0.8f;
   bool                     finished = false;  // passed; results follow
@@ -430,7 +431,17 @@ void draw_mod_icon(App&             app,
                    f32              alpha);
 // An icon for each of `mods` in a row; `x` is its left edge, centre or right
 // edge, per `align`. Returns the row's width.
-f32 draw_mod_icons(App& app, Mods mods, f32 x, f32 cy, f32 height, Align align);
+// A row of the mods' icons. With `elapsed`, seconds since they began to
+// appear, each grows in from double size half a second after the last.
+f32 draw_mod_icons(App&  app,
+                   Mods  mods,
+                   f32   x,
+                   f32   cy,
+                   f32   height,
+                   Align align,
+                   f32   elapsed = 1e9f);
+// A mod icon's height at the skin's own size, as osu!stable draws it.
+f32 mod_icon_height(const App& app);
 
 // gameplay.cc
 SliderRenderer create_slider_renderer();

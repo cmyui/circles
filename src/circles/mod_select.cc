@@ -123,12 +123,18 @@ void draw_mod_icon(App&             app,
             fade(hex_color(0x1A1A2E), alpha), Align::Center);
 }
 
+f32 mod_icon_height(const App& app) {
+  const auto* image = skin_element(app.skin, "selection-mod-nofail");
+  return (image ? image->front().height() : 68) * ui_scale(app);
+}
+
 f32 draw_mod_icons(App&  app,
                    Mods  mods,
                    f32   x,
                    f32   cy,
                    f32   height,
-                   Align align) {
+                   Align align,
+                   f32   elapsed) {
   const f32 step = height * 1.45f;  // an icon's width and the gap after it
   i32       count = 0;
   for (const ModRow& row : mod_rows())
@@ -138,10 +144,14 @@ f32 draw_mod_icons(App&  app,
   f32       left = align == Align::Left    ? x
                    : align == Align::Right ? x - width
                                            : x - width / 2;
+  i32       index = 0;
   for (const ModRow& row : mod_rows()) {
     for (const ModButton& button : row.buttons) {
       if (const i32 state = mod_button_state(mods, button)) {
-        draw_mod_icon(app, button, state, left + height * 0.65f, cy, height, 1);
+        const f32 t = clamp01((elapsed - 0.5f * index++) / 0.4f);
+        const f32 grow = 2 - (1 - (1 - t) * (1 - t));
+        draw_mod_icon(app, button, state, left + height * 0.65f, cy,
+                      height * grow, t);
         left += step;
       }
     }

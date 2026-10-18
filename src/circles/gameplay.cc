@@ -1389,6 +1389,41 @@ void draw_skin_health_bar(App&                          app,
                     scale, kWhite);
 }
 
+// The active mods' icons, as stable's Player shows them: at their own size
+// from the top right, each further left and on top, fanned closely in play
+// and spread apart in replays. Each grows in from double size after the last.
+void draw_gameplay_mod_icons(App& app) {
+  const auto& game = app.game;
+  struct Icon {
+    Mods             mod;  // stable's order is its bits'
+    const ModButton* button;
+    i32              state;
+  };
+  std::vector<Icon> icons;
+  for (const ModRow& row : mod_rows())
+    for (const ModButton& button : row.buttons)
+      if (const i32 state = mod_button_state(game.mods, button))
+        icons.push_back(
+            {state == 2 ? button.mods[1] & ~button.mods[0] : button.mods[0],
+             &button, state});
+  std::sort(icons.begin(), icons.end(), [](const Icon& a, const Icon& b) {
+    return a.mod < b.mod;
+  });
+  const f32 unit = app.height / 480;
+  const f32 spacing = game.watching ? 50 : 10;
+  for (size_t i = 0; i < icons.size(); ++i) {
+    const auto* image = skin_element(
+        app.skin, icons[i].button->skin_images[icons[i].state - 1]);
+    const f32 height = (image ? image->front().height() : 68) * ui_scale(app);
+    const f32 t = clamp01(
+        static_cast<f32>(((app.now - game.started) * 1000 - 500.0 * i) / 400));
+    const f32 grow = 2 - (1 - (1 - t) * (1 - t));
+    draw_mod_icon(app, *icons[i].button, icons[i].state,
+                  app.width - (30 + spacing * i) * unit, 94 * unit,
+                  height * grow, t);
+  }
+}
+
 void draw_hud(App& app) {
   auto&         r = app.renderer;
   const auto&   game = app.game;
@@ -1416,56 +1451,64 @@ void draw_hud(App& app) {
                         bar_height / 2, fill);
   }
 
-  // Score, accuracy and song progress
-  char score[32], accuracy_text[32];
+  // Score, accuracy and song progress, laid out as stable's ScoreDisplay:
+  // in units of a 480-unit-tall window, from its top right.
+  const f32 unit = app.height / 480;
+  const f32 right = app.width - 6 * unit;
+  char      score[32], accuracy_text[32];
   snprintf(score, sizeof(score), "%08lld",
            static_cast<long long>(std::llround(game.displayed_score)));
-  snprintf(accuracy_text, sizeof(accuracy_text), "%.2f%%",
+  snprintf(accuracy_text, sizeof(accuracy_text), "%05.2f%%",
            accuracy(game.counts) * 100);
+  // The pie sits left of the accuracy as its "00.00%" placeholder measured.
   f32 pie_x, pie_y;
-  if (scoreless) {
-    pie_x = app.width - kMargin - 9;
-    pie_y = kMargin + 9;
-  } else if (const auto* digit =
-                 skin_element(skin, config.score_prefix + "-0")) {
-    const f32 score_scale = ui_scale(app);
+  if (const auto* digit = skin_element(skin, config.score_prefix + "-0")) {
+    const f32 score_scale = ui_scale(app) * 0.96f;
     const f32 accuracy_scale = score_scale * 0.6f;
     const f32 score_height = digit->front().height() * score_scale;
     const f32 accuracy_height = digit->front().height() * accuracy_scale;
-    draw_skin_number(r, skin, config.score_prefix, score, app.width - kMargin,
-                     kMargin + score_height / 2, score_scale,
-                     config.score_overlap, kWhite, Align::Right);
-    pie_y = kMargin + score_height + 8 + accuracy_height / 2;
-    const f32 width =
-        draw_skin_number(r, skin, config.score_prefix, accuracy_text,
-                         app.width - kMargin, pie_y, accuracy_scale,
-                         config.score_overlap, kWhite, Align::Right)
-            .value_or(0);
-    pie_x = app.width - kMargin - width - 18;
+    pie_y = score_height + 3 * unit + accuracy_height / 2;
+    pie_x = right - 24 * unit -
+            skin_number_width(skin, config.score_prefix, "00.00%",
+                              accuracy_scale, config.score_overlap)
+                .value_or(0);
+    if (!scoreless) {
+      draw_skin_number(r, skin, config.score_prefix, score, right,
+                       score_height / 2, score_scale, config.score_overlap,
+                       kWhite, Align::Right);
+      draw_skin_number(r, skin, config.score_prefix, accuracy_text, right,
+                       pie_y, accuracy_scale, config.score_overlap, kWhite,
+                       Align::Right);
+    }
   } else {
     const f32 score_size = 40, accuracy_size = 22;
     const f32 score_baseline = kMargin + app.bold.cap_height * score_size;
-    draw_text_shadowed(r, app.bold, score, app.width - kMargin, score_baseline,
-                       score_size, kWhite, Align::Right);
     const f32 accuracy_baseline =
         score_baseline + 12 + app.bold.cap_height * accuracy_size;
-    draw_text_shadowed(r, app.bold, accuracy_text, app.width - kMargin,
-                       accuracy_baseline, accuracy_size, kWhite, Align::Right);
-    pie_x = app.width - kMargin -
-            measure_text(app.bold, accuracy_text, accuracy_size) - 18;
+    pie_x = right - 24 * unit - measure_text(app.bold, "00.00%", accuracy_size);
     pie_y = accuracy_baseline - app.bold.cap_height * accuracy_size / 2;
+    if (!scoreless) {
+      draw_text_shadowed(r, app.bold, score, right, score_baseline, score_size,
+                         kWhite, Align::Right);
+      draw_text_shadowed(r, app.bold, accuracy_text, right, accuracy_baseline,
+                         accuracy_size, kWhite, Align::Right);
+    }
   }
-  const f64  first = game.objects.front().time;
-  const bool intro = game.time < first;
-  const f32  progress = static_cast<f32>(
-      intro ? 1 - (first - game.time) / std::max(1.0, first + 3000)
-            : (game.time - first) / std::max(1.0, game.end_time - first));
-  draw_circle(r, pie_x, pie_y, 9, fade(kWhite, 0.2f));
-  draw_arc(r, pie_x, pie_y, 9, 0, clamp01(progress),
-           fade(intro ? hex_color(0x88EE88) : kWhite, 0.85f));
-  draw_circle(r, pie_x, pie_y, 9, kWhite, 0.85f);
-  draw_mod_icons(app, game.mods, app.width - kMargin, pie_y + 36, 30,
-                 Align::Right);
+  // Like the score, stable hides the pie under Relax and Autopilot.
+  if (!scoreless) {
+    const f64  first = game.objects.front().time;
+    const bool intro = game.time < first;
+    const f32  progress = static_cast<f32>(
+        intro ? 1 - (first - game.time) / std::max(1.0, first + 3000)
+              : (game.time - first) / std::max(1.0, game.end_time - first));
+    const f32 radius = 10 * unit;
+    draw_circle(r, pie_x, pie_y, radius, fade(kWhite, 0.2f));
+    draw_arc(
+        r, pie_x, pie_y, radius, 0, clamp01(progress),
+        intro ? Color{199 / 255.0f, 1, 47 / 255.0f, 0.6f} : fade(kWhite, 0.6f));
+    draw_circle(r, pie_x, pie_y, radius, kWhite, 0.85f);
+  }
+  draw_gameplay_mod_icons(app);
 
   // Combo
   if (game.combo > 0 && !scoreless) {
@@ -1623,6 +1666,7 @@ bool gameplay_start(App& app, i32 map_index, std::string replay_path) {
   const auto& info = app.library.maps[map_index];
   auto&       game = app.game;
   game = Gameplay{};
+  game.started = app.now;
   game.map_index = map_index;
   game.mods = app.mods;
   if (!replay_path.empty()) {

@@ -312,6 +312,21 @@ void draw_skin_image(Renderer&        r,
               image.height() * scale, angle, tint);
 }
 
+std::optional<f32> skin_number_width(const Skin&      skin,
+                                     std::string_view prefix,
+                                     std::string_view text,
+                                     f32              scale,
+                                     f32              overlap) {
+  f32 width = overlap * scale;
+  for (char c : text) {
+    const auto* frames = skin_element(skin, number_glyph(prefix, c));
+    if (!frames)
+      return std::nullopt;
+    width += (frames->front().width() - overlap) * scale;
+  }
+  return width;
+}
+
 std::optional<f32> draw_skin_number(Renderer&        r,
                                     const Skin&      skin,
                                     std::string_view prefix,

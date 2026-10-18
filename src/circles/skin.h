@@ -106,6 +106,12 @@ void draw_skin_image(Renderer&        r,
 // Draws digits and ", . % x" in a number font, vertically centred on
 // `center_y`, each 1x pixel `scale` points wide. Returns the width drawn, or
 // nothing (drawing nothing) when the skin doesn't have the font.
+// A skin number's width, or nothing if a glyph is missing.
+std::optional<f32> skin_number_width(const Skin&      skin,
+                                     std::string_view prefix,
+                                     std::string_view text,
+                                     f32              scale,
+                                     f32              overlap);
 std::optional<f32> draw_skin_number(Renderer&        r,
                                     const Skin&      skin,
                                     std::string_view prefix,

@@ -253,7 +253,8 @@ void draw_mods_button(App& app) {
   const Rect b = mods_button(app);
   draw_button(app, b.x, b.y, b.w, b.h, "Mods", over_mods_button(app) ? 1 : 0,
               hex_color(0x8844CC));
-  draw_mod_icons(app, app.mods, b.x + b.w + 16, b.y + b.h / 2, 34, Align::Left);
+  draw_mod_icons(app, app.mods, b.x + b.w + 16, b.y + b.h / 2, b.h * 1.3f,
+                 Align::Left);
 }
 
 void draw_stat_bar(App&        app,

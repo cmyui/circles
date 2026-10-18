@@ -15,11 +15,19 @@ struct Button {
 
 enum ButtonIndex : i32 { kRetry, kWatch, kBack, kButtonCount };
 
+// The screen is laid out for the default 1280x720 window. It scales with the
+// window's height, as far as the width of its bottom row, the histogram and
+// buttons, allows.
+f32 layout_scale(const App& app) {
+  return std::min(app.height / 720, app.width / 1112);
+}
+
 Button button(const App& app, i32 index) {
-  constexpr f32 kWidth = 180, kHeight = 56, kGap = 16;
+  const f32 s = layout_scale(app);
+  const f32 width = 180 * s, height = 56 * s, gap = 16 * s;
   return {
-      app.width - kButtonCount * (kWidth + kGap) - 24 + index * (kWidth + kGap),
-      app.height - kHeight - 40, kWidth, kHeight};
+      app.width - kButtonCount * (width + gap) - 24 * s + index * (width + gap),
+      app.height - height - 40 * s, width, height};
 }
 
 i32 button_at(const App& app, Vec2 point) {
@@ -59,7 +67,7 @@ Spread spread(const std::vector<f64>& offsets) {
   return result;
 }
 
-void draw_histogram(App& app, f32 x, f32 y, f32 w, f32 h) {
+void draw_histogram(App& app, f32 x, f32 y, f32 w, f32 h, f32 s) {
   auto&         r = app.renderer;
   const auto&   results = app.results;
   constexpr i32 kBins = 41;
@@ -80,10 +88,11 @@ void draw_histogram(App& app, f32 x, f32 y, f32 w, f32 h) {
     draw_rounded_rect(r, x + i * bin_w + 1, y + h - bar, bin_w - 2, bar, 2,
                       mix(hex_color(0xFFCC22), hex_color(0x66CCFF), closeness));
   }
-  draw_rect(r, x + w / 2 - 0.5f, y - 6, 1, h + 12, fade(kWhite, 0.6f));
-  draw_text(r, app.regular, "early", x, y + h + 18, 12, fade(kWhite, 0.6f));
-  draw_text(r, app.regular, "late", x + w, y + h + 18, 12, fade(kWhite, 0.6f),
-            Align::Right);
+  draw_rect(r, x + w / 2 - 0.5f, y - 6 * s, 1, h + 12 * s, fade(kWhite, 0.6f));
+  draw_text(r, app.regular, "early", x, y + h + 18 * s, 12 * s,
+            fade(kWhite, 0.6f));
+  draw_text(r, app.regular, "late", x + w, y + h + 18 * s, 12 * s,
+            fade(kWhite, 0.6f), Align::Right);
 }
 
 }  // namespace
@@ -105,26 +114,28 @@ void results_draw(App& app) {
   const auto& results = app.results;
   const auto& info = app.library.maps[results.map_index];
   const f32   t = static_cast<f32>(app.now - results.entered);
+  const f32   s = layout_scale(app);
+  const f32   left = 40 * s;
   draw_backdrop(app, 0.72f, 0.4f);
 
-  draw_rect_gradient(r, 0, 0, app.width, 120, fade(kBlack, 0.6f),
+  draw_rect_gradient(r, 0, 0, app.width, 120 * s, fade(kBlack, 0.6f),
                      fade(kBlack, 0));
-  draw_text_shadowed(
-      r, app.bold,
-      fit_text(app.bold, info.artist + " - " + info.title, 28, app.width - 80),
-      40, 52, 28, kWhite);
+  draw_text_shadowed(r, app.bold,
+                     fit_text(app.bold, info.artist + " - " + info.title,
+                              28 * s, app.width - 2 * left),
+                     left, 52 * s, 28 * s, kWhite);
   draw_text_shadowed(r, app.regular,
                      "[" + info.version + "]   mapped by " + info.creator +
                          "   played by " + results.player,
-                     40, 80, 17, fade(kWhite, 0.8f));
+                     left, 80 * s, 17 * s, fade(kWhite, 0.8f));
 
   // Totals count up as the screen opens.
   const f32 count_up = ease_out(t / 1.0f);
   char      text[64];
   snprintf(text, sizeof(text), "%08lld",
            static_cast<long long>(std::llround(results.score * count_up)));
-  draw_text(r, app.regular, "SCORE", 40, 140, 14, fade(kWhite, 0.6f));
-  draw_text_shadowed(r, app.bold, text, 40, 200, 64, kWhite);
+  draw_text(r, app.regular, "SCORE", left, 140 * s, 14 * s, fade(kWhite, 0.6f));
+  draw_text_shadowed(r, app.bold, text, left, 200 * s, 64 * s, kWhite);
 
   struct Line {
     const char* label;
@@ -138,21 +149,25 @@ void results_draw(App& app) {
       {"MISS", results.counts.miss, hex_color(0xFF4466)},
   };
   for (i32 i = 0; i < 4; ++i) {
-    const f32 x = 40 + (i % 2) * 200, y = 260 + (i / 2) * 44;
-    draw_text_shadowed(r, app.bold, lines[i].label, x, y, 20, lines[i].colour);
+    const f32 x = left + (i % 2) * 200 * s, y = (260 + (i / 2) * 44) * s;
+    draw_text_shadowed(r, app.bold, lines[i].label, x, y, 20 * s,
+                       lines[i].colour);
     snprintf(text, sizeof(text), "%dx",
              static_cast<i32>(std::lround(lines[i].count * count_up)));
-    draw_text_shadowed(r, app.bold, text, x + 70, y, 24, kWhite);
+    draw_text_shadowed(r, app.bold, text, x + 70 * s, y, 24 * s, kWhite);
   }
 
-  draw_text(r, app.regular, "ACCURACY", 40, 360, 14, fade(kWhite, 0.6f));
+  draw_text(r, app.regular, "ACCURACY", left, 360 * s, 14 * s,
+            fade(kWhite, 0.6f));
   snprintf(text, sizeof(text), "%.2f%%",
            accuracy(results.counts) * 100 * count_up);
-  draw_text_shadowed(r, app.bold, text, 40, 396, 32, kWhite);
-  draw_text(r, app.regular, "MAX COMBO", 240, 360, 14, fade(kWhite, 0.6f));
+  draw_text_shadowed(r, app.bold, text, left, 396 * s, 32 * s, kWhite);
+  draw_text(r, app.regular, "MAX COMBO", left + 200 * s, 360 * s, 14 * s,
+            fade(kWhite, 0.6f));
   snprintf(text, sizeof(text), "%dx",
            static_cast<i32>(std::lround(results.max_combo * count_up)));
-  draw_text_shadowed(r, app.bold, text, 240, 396, 32, kWhite);
+  draw_text_shadowed(r, app.bold, text, left + 200 * s, 396 * s, 32 * s,
+                     kWhite);
 
   const Spread timing = spread(results.offsets);
   snprintf(text, sizeof(text), "Unstable rate %.1f    Average %+.1f ms %s",
@@ -160,10 +175,10 @@ void results_draw(App& app) {
            std::abs(timing.mean) < 1 ? ""
            : timing.mean < 0         ? "(early)"
                                      : "(late)");
-  draw_text(r, app.regular, text, 40, 436, 15, fade(kWhite, 0.85f));
+  draw_text(r, app.regular, text, left, 436 * s, 15 * s, fade(kWhite, 0.85f));
   if (!results.offsets.empty())
-    draw_histogram(app, 40, app.height - 170,
-                   std::min(app.width * 0.42f, 460.0f), 80);
+    draw_histogram(app, left, app.height - 170 * s,
+                   std::min(app.width * 0.42f, 460 * s), 80 * s, s);
 
   // The grade lands after the totals.
   const Grade grade_ = grade(results.counts);
@@ -190,8 +205,8 @@ void results_draw(App& app) {
                          centered_baseline(app.heavy, size, cy), size,
                          fade(colour, land), Align::Center);
     }
-    draw_mod_icons(app, results.mods, cx, cy + app.height * 0.3f, 40,
-                   Align::Center);
+    draw_mod_icons(app, results.mods, cx, cy + app.height * 0.3f,
+                   mod_icon_height(app), Align::Center, t - 0.6f);
   }
 
   const char* labels[] = {"RETRY", "WATCH", "BACK"};
