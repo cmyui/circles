@@ -1,0 +1,13 @@
+InlayHints:
+  Enabled: false
+Style: { AngledHeaders: ['^(circles|tests)/'] }
+Diagnostics:
+  MissingIncludes: Strict
+  Includes:
+    IgnoreHeader:
+      # SDK declarations live in implementation headers; code includes their
+      # public counterparts.
+      - 'sys/(fcntl|syslimits|unistd|_types/_ssize_t)\.h'
+      - '_stdlib\.h'
+      # fosu's internals come in through fosu/parser.h.
+      - 'fosu/engine/.*'

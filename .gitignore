@@ -1,0 +1,8 @@
+.cache/
+.vscode/
+build/
+beatmaps/*
+!beatmaps/.gitkeep
+skins/*
+!skins/.gitkeep
+settings.txt

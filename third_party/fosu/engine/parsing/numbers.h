@@ -1,0 +1,218 @@
+#pragma once
+
+// Scalar/SWAR numeric parsing. Like the rest of the parser, these helpers
+// assume the buffer is followed by kBufferPadding readable zero bytes.
+
+#include <fosu/engine/primitives/packed_digits.h>
+#include <fosu/engine/third_party/fast_float.h>
+#include <fosu/types.h>
+
+#include <cmath>
+#include <cstddef>
+#include <cstdint>
+#include <system_error>
+
+namespace fosu::internal {
+
+inline bool is_digit(char c) {
+  return static_cast<u8>(c - '0') <= 9;
+}
+
+// All parse_* helpers return the advanced pointer, or `p` unchanged on failure.
+
+inline const char* parse_u64(const char* p, const char* end, u64& out) {
+  const char* start = p;
+  u64         v = 0;
+  while (p < end && is_digit(*p)) {
+    const u64 digit = static_cast<unsigned>(*p - '0');
+    if (v > UINT64_MAX / 10 ||
+        (v == UINT64_MAX / 10 && digit > UINT64_MAX % 10)) [[unlikely]] {
+      do {
+        ++p;
+      } while (p < end && is_digit(*p));
+      out = UINT64_MAX;
+      return p;
+    }
+    v = v * 10 + digit;
+    ++p;
+  }
+  if (p == start)
+    return start;
+  out = v;
+  return p;
+}
+
+inline const char* parse_i64(const char* p, const char* end, i64& out) {
+  const char* start = p;
+  bool        neg = false;
+  if (p < end && (*p == '-' || *p == '+')) {
+    neg = *p == '-';
+    ++p;
+  }
+  u64         mag;
+  const char* q = parse_u64(p, end, mag);
+  if (q == p)
+    return start;
+  // Convert only representable magnitudes; negating INT64_MIN is undefined.
+  if (neg)
+    out = mag >= u64(INT64_MAX) + 1 ? INT64_MIN : -static_cast<i64>(mag);
+  else
+    out = mag > u64(INT64_MAX) ? INT64_MAX : static_cast<i64>(mag);
+  return q;
+}
+
+inline i32 clamp_i32(i64 v) {
+  if (v > INT32_MAX)
+    return INT32_MAX;
+  if (v < INT32_MIN)
+    return INT32_MIN;
+  return static_cast<i32>(v);
+}
+
+inline constexpr f64 kPow10[20] = {
+    1e0,  1e1,  1e2,  1e3,  1e4,  1e5,  1e6,  1e7,  1e8,  1e9,
+    1e10, 1e11, 1e12, 1e13, 1e14, 1e15, 1e16, 1e17, 1e18, 1e19,
+};
+
+inline constexpr u64 kPow10u[9] = {
+    1, 10, 100, 1000, 10000, 100000, 1000000, 10000000, 100000000,
+};
+inline constexpr u64 kMaxExactDoubleInteger = 1ull << 53;
+
+// A decimal with at most 8 integer and 17 total digits whose value is below
+// 2^53. The digits form an exact integer and 10^fraction is an exact double, so
+// one IEEE division rounds exactly as a full decimal conversion would.
+inline const char* parse_short_decimal(const char* p, f64& out) {
+  const bool negative = *p == '-';
+  p += negative;
+  const u32 integer_digits = digit_run8(p);
+  if (integer_digits - 1 > 7)
+    return nullptr;
+  u64 mantissa = swar_parse_u64(p, integer_digits);
+  p += integer_digits;
+  u32 fraction_digits = 0;
+  if (*p == '.') {
+    const u32 first = digit_run8(++p);
+    const u32 second = first == 8 ? digit_run8(p + 8) : 0;
+    fraction_digits = first + second;
+    if (!first || integer_digits + fraction_digits > 17)
+      return nullptr;
+    mantissa = mantissa * kPow10u[first] + swar_parse_u64(p, first);
+    if (second)
+      mantissa = mantissa * kPow10u[second] + swar_parse_u64(p + 8, second);
+    p += fraction_digits;
+  }
+  // A run of eight digits may continue past what was read.
+  if (is_digit(*p) || mantissa > kMaxExactDoubleInteger)
+    return nullptr;
+  const f64 magnitude = static_cast<f64>(mantissa) / kPow10[fraction_digits];
+  out = negative ? -magnitude : magnitude;
+  return p;
+}
+
+// Locale-independent decimal parse that also accepts a leading '+'.
+inline const char* bounded_double(const char* start,
+                                  const char* end,
+                                  f64&        value) {
+  const char* p = start;
+  while (p < end && (*p == ' ' || *p == '\t'))
+    ++p;
+  if (p < end && *p == '+') {
+    ++p;
+    if (p < end && (*p == '+' || *p == '-'))
+      return start;
+  }
+  // Most values are short decimals; anything longer, exponents, and digits
+  // running past `end` take the full conversion.
+  f64 short_value;
+  if (const char* q = parse_short_decimal(p, short_value);
+      q && q <= end && (q == end || (*q != 'e' && *q != 'E'))) {
+    value = short_value;
+    return q;
+  }
+  const auto r = fast_float::from_chars(p, end, value);
+  // .NET's numeric parser accepts underflow rounded to signed zero.
+  return r.ec == std::errc() ||
+                 (r.ec == std::errc::result_out_of_range && value == 0)
+             ? r.ptr
+             : start;
+}
+
+inline const char* parse_double(const char* p, const char* end, f64& out) {
+  const char* q = bounded_double(p, end, out);
+  return q != p && std::isfinite(out) ? q : p;
+}
+
+inline bool is_numeric_space(char c) {
+  return c == ' ' || (static_cast<unsigned char>(c) - 9u <= 4u);
+}
+
+inline const char* skip_numeric_space(const char* p, const char* end) {
+  // The input is padded even at end. Digits and field separators take one
+  // byte comparison; uncommon control/space bytes use the bounded loop.
+  if (static_cast<unsigned char>(*p) > 32)
+    return p;
+  while (p < end && is_numeric_space(*p))
+    ++p;
+  return p;
+}
+
+// Numeric acceptance follows osu.Game Parsing, independently of gameplay
+// clamping or our raw-field storage types. These run only outside digit-only
+// fast paths whose field widths already prove the same limits.
+inline const char* parse_osu_int(const char* p, const char* end, i64& out) {
+  const char* first = skip_numeric_space(p, end);
+  const char* q = parse_i64(first, end, out);
+  if (q == first || out < -INT32_MAX || out > INT32_MAX) [[unlikely]]
+    return p;
+  return skip_numeric_space(q, end);
+}
+
+inline const char* parse_osu_double(const char* p,
+                                    const char* end,
+                                    f64&        out,
+                                    f64         limit = INT32_MAX) {
+  const char* first = skip_numeric_space(p, end);
+  const char* q = bounded_double(first, end, out);
+  // One absolute-value bound also rejects infinities and NaN.
+  if (q == first || !(std::abs(out) <= limit)) [[unlikely]]
+    return p;
+  return skip_numeric_space(q, end);
+}
+
+inline const char* parse_osu_float(const char* p,
+                                   const char* end,
+                                   f32&        out,
+                                   f32         limit = f32(INT32_MAX)) {
+  const char* number = skip_numeric_space(p, end);
+  if (number < end && *number == '+') {
+    ++number;
+    if (number < end && (*number == '+' || *number == '-'))
+      return p;
+  }
+
+  const bool  negative = number < end && *number == '-';
+  const char* magnitude = number + negative;
+  const u32   digits = digit_run8(magnitude);
+  if (digits && digits <= static_cast<size_t>(end - magnitude) &&
+      (digits < 8 || !is_digit(magnitude[8])) && magnitude[digits] != '.' &&
+      magnitude[digits] != 'e' && magnitude[digits] != 'E') {
+    const u64 integer = digits <= 4 ? swar_parse_u32(magnitude, digits)
+                                    : swar_parse_u64(magnitude, digits);
+    const f32 value = static_cast<f32>(integer);
+    out = negative ? -value : value;
+    if (!(std::abs(out) <= limit)) [[unlikely]]
+      return p;
+    return skip_numeric_space(magnitude + digits, end);
+  }
+
+  const auto r = fast_float::from_chars(number, end, out);
+  if (r.ec != std::errc() &&
+      !(r.ec == std::errc::result_out_of_range && out == 0)) [[unlikely]]
+    return p;
+  if (!(std::abs(out) <= limit)) [[unlikely]]
+    return p;
+  return skip_numeric_space(r.ptr, end);
+}
+
+}  // namespace fosu::internal

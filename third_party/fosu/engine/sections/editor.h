@@ -1,0 +1,135 @@
+#pragma once
+
+#include <fosu/beatmap.h>
+#include <fosu/beatmap_header.h>
+#include <fosu/engine/parsing/field_values.h>
+#include <fosu/engine/parsing/key_value.h>
+#include <fosu/engine/parsing/lines.h>
+#include <fosu/engine/parsing/numbers.h>
+#include <fosu/engine/parsing/string_lookup.h>
+#include <fosu/engine/primitives/byte_scan.h>
+#include <fosu/engine/third_party/fast_float.h>
+#include <fosu/format.h>
+#include <fosu/parse_options.h>
+#include <fosu/types.h>
+
+#include <algorithm>
+#include <cstddef>
+#include <limits>
+#include <optional>
+#include <string_view>
+#include <system_error>
+
+namespace fosu::internal {
+
+inline size_t set_default_velocity_presets(Beatmap& beatmap) {
+  beatmap.velocity_presets[0] = 0.75;
+  beatmap.velocity_presets[1] = 1;
+  beatmap.velocity_presets[2] = 1.5;
+  return 3;
+}
+
+inline std::optional<f64> parse_editor_scale(std::string_view input) {
+  if (const auto value = parse_field_double(input))
+    return std::max(0.0, *value);
+  return std::nullopt;
+}
+
+inline std::optional<i32> parse_beat_divisor(std::string_view input) {
+  if (const auto value = parse_field_integer(input))
+    return std::clamp(*value, 1, 64);
+  return std::nullopt;
+}
+
+inline constexpr auto kEditorFields = make_string_lookup<FieldParser>({
+    {"Bookmarks", assign_field_text<&BeatmapHeader::bookmarks>},
+    {"DistanceSpacing",
+     assign_field_value<&BeatmapHeader::distance_spacing, parse_editor_scale>},
+    {"BeatDivisor",
+     assign_field_value<&BeatmapHeader::beat_divisor, parse_beat_divisor>},
+    {"GridSize",
+     assign_field_value<&BeatmapHeader::grid_size, parse_field_integer>},
+    {"TimelineZoom",
+     assign_field_value<&BeatmapHeader::timeline_zoom, parse_editor_scale>},
+});
+
+// lazer reads each preset with .NET double.TryParse (NumberStyles.Float):
+// ASCII spaces around an optional sign and a decimal, or NaN or Infinity in
+// any case. There is no range limit; out-of-range values become infinities
+// or zeros.
+inline std::optional<f64> parse_velocity_preset(std::string_view text) {
+  const char* p = text.data();
+  const char* end = p + text.size();
+  while (p < end && is_numeric_space(*p))
+    ++p;
+  while (end > p && is_numeric_space(end[-1]))
+    --end;
+  const bool negative = p < end && *p == '-';
+  if (p < end && (*p == '-' || *p == '+'))
+    ++p;
+  const auto is = [&](std::string_view word) {
+    return static_cast<size_t>(end - p) == word.size() &&
+           std::equal(p, end, word.begin(), [](char a, char b) {
+             return (a | 0x20) == b;
+           });
+  };
+  if (is("nan"))
+    return std::numeric_limits<f64>::quiet_NaN();
+  if (is("infinity"))
+    return negative ? -std::numeric_limits<f64>::infinity()
+                    : std::numeric_limits<f64>::infinity();
+  if (p == end || !(is_digit(*p) || *p == '.'))
+    return std::nullopt;
+  f64        value;
+  const auto r = fast_float::from_chars(p, end, value);
+  if (r.ptr != end ||
+      (r.ec != std::errc() && r.ec != std::errc::result_out_of_range))
+    return std::nullopt;
+  return negative ? -value : value;
+}
+
+template <Format F>
+bool parse_velocity_presets(Beatmap&         beatmap,
+                            size_t&          count,
+                            std::string_view input) {
+  size_t      parsed = 0;
+  const char* p = input.data();
+  const char* end = p + input.size();
+  while (p < end) {
+    const char* comma = find_byte<','>(p, end);
+    const auto  value =
+        parse_velocity_preset({p, static_cast<size_t>(comma - p)});
+    // Stable stores exactly three presets; lazer accepts any number.
+    const size_t limit = F.lazer_format ? beatmap.velocity_presets.size() : 3;
+    if (value && parsed == limit)
+      return false;
+    if (value)
+      beatmap.velocity_presets[parsed++] = *value;
+    p = comma == end ? end : comma + 1;
+  }
+  count = parsed;
+  return true;
+}
+
+template <Format F, Client C>
+const char* parse_editor_section(Beatmap&    beatmap,
+                                 size_t&     velocity_preset_count,
+                                 bool&       velocity_presets_seen,
+                                 const char* p,
+                                 const char* end) {
+  return for_each_section_line<C>(p, end, [&](std::string_view line) {
+    const auto field = split_key_value(line);
+    if (!field)
+      return;
+    if (field->key == "VelocityPresets") {
+      velocity_presets_seen = true;
+      if (!parse_velocity_presets<F>(beatmap, velocity_preset_count,
+                                     field->value))
+        ++beatmap.stats.malformed_lines;
+      return;
+    }
+    parse_key_value(beatmap, kEditorFields, *field);
+  });
+}
+
+}  // namespace fosu::internal

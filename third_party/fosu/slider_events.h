@@ -1,0 +1,117 @@
+#pragma once
+
+// Copyright (c) ppy Pty Ltd <contact@ppy.sh>; MIT licence in slider_geometry.h.
+
+#include <fosu/arena.h>
+#include <fosu/beatmap.h>
+#include <fosu/compiler.h>
+#include <fosu/parse_options.h>
+#include <fosu/slider_event.h>
+#include <fosu/slider_path.h>
+#include <fosu/slider_timing.h>
+#include <fosu/types.h>
+
+#include <algorithm>
+#include <cstddef>
+#include <span>
+
+namespace fosu::internal {
+
+FOSU_FP_CONTRACT_OFF_BEGIN
+
+inline bool set_slider_events(Beatmap&       map,
+                              Client         client,
+                              Arena*         result_arena,
+                              Arena*         scratch_arena,
+                              std::span<f64> stacking_end_times = {}) {
+  if (map.sliders.empty())
+    return true;
+  const TempArena temp{scratch_arena};
+  auto*           timings =
+      arena_push_array<SliderTiming>(scratch_arena, map.sliders.size());
+  auto* ranges = arena_push_array<std::span<SliderEvent>>(result_arena,
+                                                          map.sliders.size());
+  if (!timings || !ranges ||
+      !set_slider_end_times(map, client, scratch_arena,
+                            {timings, map.sliders.size()},
+                            stacking_end_times)) {
+    return false;
+  }
+  size_t remaining = 1u << 20;  // Bound pathological repeat/tick expansion.
+  for (const auto& object : map.hit_objects) {
+    if (object.slider == HitObject::kNoSlider)
+      continue;
+    const auto& path = map.slider_paths[object.slider];
+    const auto& timing = timings[object.slider];
+    const f64   length = std::min(100000.0, path.distance());
+    const f64   tick_distance = std::clamp(timing.tick_distance, 0.0, length);
+    const f64   minimum_from_end = timing.velocity * 10;
+    size_t      tick_count = 0;
+    // Count with the same repeated addition used to place ticks, avoiding a
+    // division/rounding disagreement at an exact tick or exclusion boundary.
+    if (tick_distance > 0)
+      for (f64 d = tick_distance; d <= length && d < length - minimum_from_end;
+           d += tick_distance)
+        ++tick_count;
+    const size_t count =
+        2 + static_cast<size_t>(timing.spans) * (tick_count + 1);
+    if (count > remaining) {
+      return false;
+    }
+    remaining -= count;
+    auto* events = arena_push_array<SliderEvent>(result_arena, count);
+    if (!events) {
+      return false;
+    }
+    size_t next = 0;
+    auto   event = [&](SliderEventType type, f64 time, i32 span, f64 progress) {
+      return SliderEvent{type,     time,
+                         span,     object.time + span * timing.span_duration,
+                         progress, slider_position_at(path, progress)};
+    };
+    events[next++] = event(SliderEventType::Head, object.time, 0, 0);
+    for (i32 span = 0; span < timing.spans; ++span) {
+      const f64 start = object.time + span * timing.span_duration;
+      f64       d = tick_distance;
+      for (size_t tick = 0; tick < tick_count; ++tick, d += tick_distance) {
+        const f64    progress = d / length;
+        const f64    time_progress = span % 2 ? 1 - progress : progress;
+        const size_t index = span % 2 ? tick_count - tick - 1 : tick;
+        events[next + index] =
+            event(SliderEventType::Tick,
+                  start + time_progress * timing.span_duration, span, progress);
+      }
+      next += tick_count;
+      if (span < timing.spans - 1)
+        events[next++] =
+            event(SliderEventType::Repeat, start + timing.span_duration, span,
+                  (span + 1) % 2);
+    }
+    const i32 final_span = timing.spans - 1;
+    const f64 final_span_start =
+        object.time + final_span * timing.span_duration;
+    const f64 duration = timing.spans * timing.span_duration;
+    const f64 legacy_time =
+        std::max(object.time + duration / 2,
+                 final_span_start + timing.span_duration - 36);
+    f64 legacy_progress;
+    if (timing.span_duration == 0) {
+      legacy_progress = timing.spans % 2;
+    } else {
+      legacy_progress = (legacy_time - final_span_start) / timing.span_duration;
+      if (timing.spans % 2 == 0)
+        legacy_progress = 1 - legacy_progress;
+    }
+    events[next++] = event(SliderEventType::LegacyLastTick, legacy_time,
+                           final_span, legacy_progress);
+    events[next++] = event(SliderEventType::Tail, object.end_time, final_span,
+                           timing.spans % 2);
+    ranges[object.slider] = {events, count};
+  }
+  map.slider_events = {ranges, map.sliders.size()};
+  return true;
+}
+
+FOSU_FP_CONTRACT_OFF_END
+
+}  // namespace fosu::internal

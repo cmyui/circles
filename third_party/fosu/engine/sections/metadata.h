@@ -1,0 +1,34 @@
+#pragma once
+
+#include <fosu/beatmap.h>
+#include <fosu/beatmap_header.h>
+#include <fosu/engine/parsing/field_values.h>
+#include <fosu/engine/parsing/key_value.h>
+#include <fosu/engine/parsing/string_lookup.h>
+#include <fosu/parse_options.h>
+
+namespace fosu::internal {
+
+inline constexpr auto kMetadataFields = make_string_lookup<FieldParser>({
+    {"TitleUnicode", assign_field_text<&BeatmapHeader::title_unicode>},
+    {"Title", assign_field_text<&BeatmapHeader::title>},
+    {"ArtistUnicode", assign_field_text<&BeatmapHeader::artist_unicode>},
+    {"Artist", assign_field_text<&BeatmapHeader::artist>},
+    {"Creator", assign_field_text<&BeatmapHeader::creator>},
+    {"Version", assign_field_text<&BeatmapHeader::version>},
+    {"Source", assign_field_text<&BeatmapHeader::source>},
+    {"Tags", assign_field_text<&BeatmapHeader::tags>},
+    {"BeatmapSetID",
+     assign_field_value<&BeatmapHeader::beatmap_set_id, parse_field_integer>},
+    {"BeatmapID",
+     assign_field_value<&BeatmapHeader::beatmap_id, parse_field_integer>},
+});
+
+template <Client C>
+const char* parse_metadata_section(Beatmap&    beatmap,
+                                   const char* p,
+                                   const char* end) {
+  return parse_key_value_section<C>(beatmap, kMetadataFields, p, end);
+}
+
+}  // namespace fosu::internal
