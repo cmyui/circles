@@ -1,5 +1,6 @@
 #include <circles/app.h>
 #include <circles/archive.h>
+#include <circles/strings.h>
 
 #include <algorithm>
 #include <chrono>
@@ -379,6 +380,51 @@ void draw_profiler_overlay(App& app) {
             fade(kWhite, 0.8f));
 }
 
+// Imports the dropped archives into beatmaps/ and selects the first new map.
+// Rescanning renumbers the library's maps, so it waits until no screen holds
+// one: the main menu or song select.
+void import_dropped(App& app) {
+  namespace fs = std::filesystem;
+  std::error_code error;
+  for (const auto& path : app.dropped) {
+    const fs::path source(path);
+    const fs::path destination =
+        fs::path(kBeatmapDirectory) / source.filename();
+    if (!fs::equivalent(source, destination, error))
+      fs::copy_file(source, destination, fs::copy_options::skip_existing,
+                    error);
+  }
+  app.dropped.clear();
+  const auto imported = import_archives(kBeatmapDirectory, ".osz");
+  if (imported.empty()) {
+    show_toast(app, "Already imported, or not a valid .osz");
+    return;
+  }
+  const std::string previous =
+      app.selected_map >= 0 ? app.library.maps[app.selected_map].md5 : "";
+  app.library = scan_library(kBeatmapDirectory);
+  i32 select = -1, kept = -1;
+  for (size_t m = 0; m < app.library.maps.size(); ++m) {
+    const auto& info = app.library.maps[m];
+    if (select < 0 && fs::path(info.osu_path).parent_path() == imported.front())
+      select = static_cast<i32>(m);
+    if (info.md5 == previous)
+      kept = static_cast<i32>(m);
+  }
+  char text[64];
+  snprintf(text, sizeof(text), "Imported %zu beatmap set%s", imported.size(),
+           imported.size() == 1 ? "" : "s");
+  show_toast(app,
+             select >= 0 ? text : "Imported, but it has no osu!standard maps");
+  // The old selection, renumbered, so selecting the new map compares songs
+  // and starts its preview.
+  app.selected_map = kept;
+  if (select >= 0)
+    select_map(app, select, true);
+  if (app.screen == Screen::SongSelect)
+    select_enter(app);
+}
+
 void draw_overlays(App& app) {
   auto& r = app.renderer;
   if (app.settings_menu.open)
@@ -498,6 +544,9 @@ void app_frame(App& app, f64 now) {
     app.fps_window_start = now;
   }
   update_backdrop(app);
+  if (!app.dropped.empty() && app.transition_started < 0 &&
+      (app.screen == Screen::MainMenu || app.screen == Screen::SongSelect))
+    import_dropped(app);
   for (auto* trail : {&app.trail, &app.game.replay_trail})
     while (!trail->empty() && now - trail->front().time > kTrailLength)
       trail->pop_front();
@@ -679,6 +728,20 @@ void app_cursor(App& app, f64 x, f64 y) {
   app.cursor = {static_cast<f32>(x), static_cast<f32>(y)};
   app.trail.push_back({glfwGetTime(), app.cursor});
   settings_cursor(app);
+}
+
+void app_drop(App& app, std::span<const char* const> paths) {
+  size_t queued = 0;
+  for (const char* path : paths) {
+    if (lowercase(std::filesystem::path(path).extension().string()) != ".osz")
+      continue;
+    app.dropped.emplace_back(path);
+    ++queued;
+  }
+  if (!queued)
+    show_toast(app, "Drop .osz beatmap archives to import them");
+  else if (app.screen == Screen::Gameplay || app.screen == Screen::Results)
+    show_toast(app, "Importing once you're back at song select");
 }
 
 void app_focus(App& app, bool focused) {

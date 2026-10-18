@@ -324,6 +324,8 @@ struct App {
   f64  audio_offset = 0;
   // Replays in replays/, and the one gameplay should play back next.
   std::vector<ReplayEntry> replays;
+  // Beatmap archives dropped on the window, awaiting import.
+  std::vector<std::string> dropped;
   std::string              replay_to_watch;
   // Whether mouse buttons hit in gameplay. Tablet players who tap keys turn
   // them off so pen taps don't count.
@@ -369,6 +371,8 @@ void app_mouse_button(App& app, i32 button, i32 action);
 void app_scroll(App& app, f64 dy);
 void app_cursor(App& app, f64 x, f64 y);
 void app_focus(App& app, bool focused);
+// Files dropped on the window: .osz beatmap archives are imported.
+void app_drop(App& app, std::span<const char* const> paths);
 
 // Fades out, switches, and fades back in.
 void switch_screen(App& app, Screen screen);

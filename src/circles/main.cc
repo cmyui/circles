@@ -79,6 +79,9 @@ int main(int argc, char** argv) {
   glfwSetWindowFocusCallback(window, [](GLFWwindow* w, int focused) {
     circles::app_focus(app_of(w), focused);
   });
+  glfwSetDropCallback(window, [](GLFWwindow* w, int count, const char** paths) {
+    circles::app_drop(app_of(w), {paths, static_cast<size_t>(count)});
+  });
   if (options.width > 0 && options.height > 0)
     glfwSetWindowSize(window, options.width, options.height);
   app->vsync = options.vsync;
