@@ -120,6 +120,7 @@ struct BodyCache {
   size_t           object = 0;
   bool             used = false;  // drawn this frame
   BodyTarget       target;
+  BodyTarget       scratch;       // private snaking image when batching sliders
   i32              x = 0, y = 0;  // the target's place in the framebuffer
   size_t           settled = 0;   // pieces drawn into it
   bool             squashable = false;

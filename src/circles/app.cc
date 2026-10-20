@@ -601,6 +601,7 @@ void app_frame(App& app, f64 now) {
   }
   draw_overlays(app);
   flush(app.renderer);
+  end_frame(app.renderer);
   profile_gpu_end(app.profiler);
   profile_phase(app.profiler, FramePhase::Draw);
 }
@@ -611,6 +612,7 @@ void app_shutdown(App& app) {
   release_slider_bodies(app.game.bodies);
   destroy_skin(app.skin);
   audio_shutdown(app.audio);
+  destroy_upload_arena(app.renderer.uploads);
   glfwDestroyWindow(app.window);
   glfwTerminate();
 }

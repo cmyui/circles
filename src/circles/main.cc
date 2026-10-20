@@ -26,6 +26,8 @@ struct Options {
   bool        uncapped = false;
   bool        vsync = false;
   bool        skip_intro = false;
+  bool        batch_sliders = false;
+  bool        reuse_uploads = false;
 };
 
 bool parse_options(int argc, char** argv, Options& options) {
@@ -49,11 +51,16 @@ bool parse_options(int argc, char** argv, Options& options) {
       options.vsync = true;
     else if (!std::strcmp(argv[i], "--skip-intro"))
       options.skip_intro = true;
+    else if (!std::strcmp(argv[i], "--batch-sliders"))
+      options.batch_sliders = true;
+    else if (!std::strcmp(argv[i], "--reuse-uploads"))
+      options.reuse_uploads = true;
     else {
       std::fprintf(
           stderr,
           "usage: circles [--benchmark replay.osr|map.osu] [--size WxH] "
-          "[--uncapped] [--vsync] [--benchmark-seconds N] [--skip-intro]\n");
+          "[--uncapped] [--vsync] [--benchmark-seconds N] [--skip-intro] "
+          "[--batch-sliders] [--reuse-uploads]\n");
       return false;
     }
   }
@@ -71,6 +78,8 @@ int main(int argc, char** argv) {
   auto app = std::make_unique<circles::App>();
   if (!circles::app_init(*app))
     return 1;
+  app->renderer.batch_sliders = options.batch_sliders;
+  app->renderer.reuse_uploads = options.reuse_uploads;
   GLFWwindow* window = app->window;
   glfwSetWindowUserPointer(window, app.get());
   glfwSetKeyCallback(window, [](GLFWwindow* w, int key, int, int action, int) {

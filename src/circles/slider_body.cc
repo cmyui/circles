@@ -378,9 +378,28 @@ void draw_pieces(App&             app,
   glActiveTexture(GL_TEXTURE0);
   glBindTexture(GL_TEXTURE_2D, cache.gradient);
   glBindVertexArray(s.vao);
-  glBindBuffer(GL_ARRAY_BUFFER, s.instances);
-  glBufferData(GL_ARRAY_BUFFER, s.batch.size() * sizeof(PieceInstance),
-               s.batch.data(), GL_STREAM_DRAW);
+  if (app.renderer.reuse_uploads) {
+    const size_t offset =
+        upload_vertices(app.renderer.uploads, s.batch.data(),
+                        s.batch.size() * sizeof(PieceInstance));
+    constexpr GLsizei stride = sizeof(PieceInstance);
+    glVertexAttribPointer(
+        0, 2, GL_FLOAT, GL_FALSE, stride,
+        reinterpret_cast<void*>(offset + offsetof(PieceInstance, p1)));
+    glVertexAttribPointer(
+        1, 2, GL_FLOAT, GL_FALSE, stride,
+        reinterpret_cast<void*>(offset + offsetof(PieceInstance, p2)));
+    glVertexAttribPointer(
+        2, 3, GL_FLOAT, GL_FALSE, stride,
+        reinterpret_cast<void*>(offset + offsetof(PieceInstance, cos)));
+    glVertexAttribIPointer(
+        3, 4, GL_UNSIGNED_BYTE, stride,
+        reinterpret_cast<void*>(offset + offsetof(PieceInstance, end_cap)));
+  } else {
+    glBindBuffer(GL_ARRAY_BUFFER, s.instances);
+    glBufferData(GL_ARRAY_BUFFER, s.batch.size() * sizeof(PieceInstance),
+                 s.batch.data(), GL_STREAM_DRAW);
+  }
   glDisable(GL_BLEND);
   glEnable(GL_DEPTH_TEST);
   glDepthFunc(GL_LEQUAL);
@@ -440,11 +459,17 @@ namespace {
 // Puts back the GL state the batched drawing expects.
 struct ScreenRestorer {
   const App& app;
-  ~ScreenRestorer() {
+  bool       active = true;
+  void finish() {
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     glViewport(0, 0, app.pixel_width, app.pixel_height);
     glEnable(GL_BLEND);
     glDisable(GL_DEPTH_TEST);
+    active = false;
+  }
+  ~ScreenRestorer() {
+    if (active)
+      finish();
   }
 };
 
@@ -482,7 +507,8 @@ void draw_slider_body(App&   app,
     cache = game.bodies.caches.end() - 1;
   }
   cache->used = true;
-  flush(app.renderer);
+  if (!app.renderer.batch_sliders)
+    flush(app.renderer);
   ScreenRestorer restore{app};
 
   // A new place on screen: a new texture, over the body's area.
@@ -549,22 +575,29 @@ void draw_slider_body(App&   app,
   // The snaking end changes every frame: drawn over a copy of the rest.
   const BodyTarget* shown = &target;
   if (!state.done) {
-    if (s.scratch.width < app.pixel_width ||
-        s.scratch.height < app.pixel_height) {
-      destroy_target(s.scratch);
-      s.scratch = create_target(app.pixel_width, app.pixel_height);
+    auto&     scratch = app.renderer.batch_sliders ? cache->scratch : s.scratch;
+    const i32 width =
+        app.renderer.batch_sliders ? target.width : app.pixel_width;
+    const i32 height =
+        app.renderer.batch_sliders ? target.height : app.pixel_height;
+    if (scratch.width != width || scratch.height != height) {
+      destroy_target(scratch);
+      scratch = create_target(width, height);
     }
     glBindFramebuffer(GL_READ_FRAMEBUFFER, target.framebuffer);
-    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, s.scratch.framebuffer);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, scratch.framebuffer);
     glBlitFramebuffer(0, 0, target.width, target.height, 0, 0, target.width,
                       target.height, GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT,
                       GL_NEAREST);
     add_instances(s.batch, shape, state, settled, state.count(), display);
-    draw_pieces(app, s.scratch.framebuffer, cache->x, cache->y, target.width,
+    draw_pieces(app, scratch.framebuffer, cache->x, cache->y, target.width,
                 target.height, *cache);
-    shown = &s.scratch;
+    shown = &scratch;
   }
 
+  // draw_image_region may flush when texture slots fill up. Its destination
+  // must be the screen, never the body texture it is sampling.
+  restore.finish();
   draw_image_region(
       app.renderer,
       {.id = shown->colour, .width = shown->width, .height = shown->height},
@@ -580,8 +613,10 @@ void draw_slider_body(App&   app,
 void sweep_slider_bodies(App& app) {
   auto& caches = app.game.bodies.caches;
   for (auto& cache : caches)
-    if (!cache.used)
+    if (!cache.used) {
       destroy_target(cache.target);
+      destroy_target(cache.scratch);
+    }
   std::erase_if(caches, [](const BodyCache& c) {
     return !c.used;
   });
@@ -590,8 +625,10 @@ void sweep_slider_bodies(App& app) {
 }
 
 void release_slider_bodies(SliderBodies& bodies) {
-  for (auto& cache : bodies.caches)
+  for (auto& cache : bodies.caches) {
     destroy_target(cache.target);
+    destroy_target(cache.scratch);
+  }
   bodies.caches.clear();
 }
 

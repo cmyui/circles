@@ -92,6 +92,52 @@ with them. Hidden and Flashlight make S and SS grades silver.
 In song select, type to search, use the arrow keys to choose, Enter to play
 and F2 for a random song.
 
+## OpenGL benchmarks
+
+Build Release and run a replay with automatic intro skipping:
+
+```sh
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build -j8
+./build/circles --benchmark replays/example.osr --uncapped --skip-intro --benchmark-seconds 28
+```
+
+`--benchmark-seconds` limits time from process startup and saves the profile
+before exiting. `--skip-intro` uses a fixed landing time at the normal skip
+boundary. Controls remain available; Space skips manually, the arrow keys
+seek, and Esc pauses. Benchmarks continue when their window loses focus.
+Avoid interacting during a measured comparison.
+
+Two independent, opt-in rendering experiments keep one OpenGL swap per frame:
+
+- `--batch-sliders`: give each snaking slider its own scratch texture so screen
+  geometry can stay batched across slider draws.
+- `--reuse-uploads`: map unused ranges of reusable vertex buffers and wait for
+  GPU fences before recycling a frame's ranges.
+
+Run the CPU checks with `make test`. The separate graphics checks require a
+logged-in macOS graphics session:
+
+```sh
+cmake --build build --target check-gl
+```
+
+`tools/bench_opengl.py` compares a baseline binary against the corrected
+renderer with neither optimization, each alone, and both. The baseline must
+have the same timed benchmark and intro-skip controls. It runs each process
+for at most 30 seconds, changes variant order across rounds, and saves raw
+profiles, executable hashes, settings and summaries under the output directory.
+Summaries use profile seconds 2–22 after the automatic skip; the amount of
+countdown remaining depends on the map. Keep the replay, skin, window size
+and presentation settings identical. Runs with a key or mouse-button press
+before the measurement window ends are saved but excluded from the comparison.
+
+```sh
+python3 tools/bench_opengl.py --baseline path/to/control/circles \
+  --experiment build/circles --replay replays/example.osr \
+  --output perf/opengl-comparison --rounds 3
+```
+
 ## Limitations
 
 - Without a skin, hitsounds are synthesized. Beatmaps' own hitsound samples,
