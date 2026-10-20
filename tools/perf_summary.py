@@ -8,6 +8,7 @@ Profiles come from F8 in game (press again to save) or
 """
 
 import argparse
+import bisect
 import csv
 import statistics
 from collections import defaultdict
@@ -50,26 +51,32 @@ def main():
         return
     span = (chosen[-1]["start_ms"] - chosen[0]["start_ms"]) / 1000
     totals = [sum(f[f"{p}_ms"] for p in PHASES) for f in chosen]
-    busy = [f["poll_ms"] + f["update_ms"] + f["draw_ms"] for f in chosen]
+    work = [f["update_ms"] + f["draw_ms"] + f["swap_ms"] for f in chosen]
     gpu = [f["gpu_ms"] for f in chosen if f["gpu_ms"] >= 0]
 
-    print(f"{args.frames_csv.name}: {len(chosen)} frames over {span:.1f} s, "
-          f"{len(chosen) / max(span, 1e-9):.0f} fps")
-    print("frame time")
+    rendered = [f for f in chosen if f.get("rendered", 1)]
+    print(f"{args.frames_csv.name}: {len(chosen)} updates over {span:.1f} s, "
+          f"{len(chosen) / max(span, 1e-9):.0f} updates/s, "
+          f"{len(rendered) / max(span, 1e-9):.0f} submitted render frames/s")
+    print("update-loop time (poll may include waiting for an event/drawable)")
     print(row("total", totals))
     for phase in PHASES:
         values = [f[f"{phase}_ms"] for f in chosen]
         share = sum(values) / max(sum(totals), 1e-9)
         print(row(phase, values) + f"  ({share:5.1%})")
-    print(row("cpu busy", busy) + "  (poll + update + draw)")
+    print(row("update/draw/submit", work) + "  (wall time, excludes event wait)")
     print(row("gpu", gpu))
+    print(row("render interval", [
+        b["start_ms"] - a["start_ms"] for a, b in zip(rendered, rendered[1:])
+    ]))
     # Only sampled frames are GPU-timed.
     timed = [f for f in chosen if f["gpu_ms"] >= 0]
-    gpu_bound = sum(1 for f in timed if f["gpu_ms"] > f["poll_ms"] + f["update_ms"] + f["draw_ms"])
-    print(f"  gpu took longer than the cpu's work on "
-          f"{gpu_bound / max(len(timed), 1):.1%} of {len(timed)} timed frames")
-    print(f"  draw calls {statistics.fmean(f['draw_calls'] for f in chosen):.1f}, "
-          f"vertices {statistics.fmean(f['vertices'] for f in chosen):.0f} per frame")
+    gpu_longer = sum(1 for f in timed if f["gpu_ms"] > f["update_ms"] + f["draw_ms"] + f["swap_ms"])
+    print(f"  GPU command-buffer duration exceeded update/draw/submit wall time on "
+          f"{gpu_longer / max(len(timed), 1):.1%} of {len(timed)} sampled frames")
+    if rendered:
+        print(f"  draw calls {statistics.fmean(f['draw_calls'] for f in rendered):.1f}, "
+              f"vertices {statistics.fmean(f['vertices'] for f in rendered):.0f} per rendered frame")
     slow = sorted(range(len(chosen)), key=lambda i: totals[i], reverse=True)[:5]
     print("slowest frames: " + ", ".join(
         f"#{int(chosen[i]['frame'])} {totals[i]:.2f} ms" for i in slow))
@@ -97,8 +104,12 @@ def main():
               + (f", report interval p50 {pct(gaps, 0.5):.2f} ms "
                  f"(~{1000 / pct(gaps, 0.5):.0f} Hz)" if moves and gaps else ""))
         print("  " + row("event → seen", delays))
-    # A press counts at the update after the poll that saw it, and shows once
-    # that frame's swap returns.
+    # A press is processed in its update. Submission is the next rendered
+    # frame; this does not measure physical display or input-to-photon latency.
+    submissions = [
+        f["start_ms"] + sum(f[f"{p}_ms"] for p in PHASES[:4])
+        for f in frames if f.get("rendered", 1)
+    ]
     to_update, to_swap = [], []
     for i in inputs:
         if i["kind"] not in ("key_down", "button_down"):
@@ -108,13 +119,14 @@ def main():
             continue
         event = float(i["event_ms"])
         updated = frame["start_ms"] + frame["poll_ms"] + frame["update_ms"]
-        swapped = updated + frame["draw_ms"] + frame["swap_ms"]
         to_update.append(updated - event)
-        to_swap.append(swapped - event)
+        next_submission = bisect.bisect_left(submissions, updated)
+        if next_submission < len(submissions):
+            to_swap.append(submissions[next_submission] - event)
     if to_update:
         print("presses")
         print(row("event → judged", to_update))
-        print(row("event → swapped", to_swap))
+        print(row("event → submitted", to_swap))
 
 
 if __name__ == "__main__":

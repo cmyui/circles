@@ -1,4 +1,5 @@
 #include <circles/app.h>
+#include <circles/metal.h>
 
 #include <chrono>
 #include <cstdio>
@@ -26,8 +27,6 @@ struct Options {
   bool        uncapped = false;
   bool        vsync = false;
   bool        skip_intro = false;
-  bool        batch_sliders = false;
-  bool        reuse_uploads = false;
 };
 
 bool parse_options(int argc, char** argv, Options& options) {
@@ -51,16 +50,11 @@ bool parse_options(int argc, char** argv, Options& options) {
       options.vsync = true;
     else if (!std::strcmp(argv[i], "--skip-intro"))
       options.skip_intro = true;
-    else if (!std::strcmp(argv[i], "--batch-sliders"))
-      options.batch_sliders = true;
-    else if (!std::strcmp(argv[i], "--reuse-uploads"))
-      options.reuse_uploads = true;
     else {
       std::fprintf(
           stderr,
           "usage: circles [--benchmark replay.osr|map.osu] [--size WxH] "
-          "[--uncapped] [--vsync] [--benchmark-seconds N] [--skip-intro] "
-          "[--batch-sliders] [--reuse-uploads]\n");
+          "[--uncapped] [--vsync] [--benchmark-seconds N] [--skip-intro]\n");
       return false;
     }
   }
@@ -78,8 +72,6 @@ int main(int argc, char** argv) {
   auto app = std::make_unique<circles::App>();
   if (!circles::app_init(*app))
     return 1;
-  app->renderer.batch_sliders = options.batch_sliders;
-  app->renderer.reuse_uploads = options.reuse_uploads;
   GLFWwindow* window = app->window;
   glfwSetWindowUserPointer(window, app.get());
   glfwSetKeyCallback(window, [](GLFWwindow* w, int key, int, int action, int) {
@@ -109,7 +101,7 @@ int main(int argc, char** argv) {
   if (options.width > 0 && options.height > 0)
     glfwSetWindowSize(window, options.width, options.height);
   app->vsync = options.vsync;
-  glfwSwapInterval(app->vsync ? 1 : 0);
+  circles::gpu_set_vsync(app->vsync);
   if (!options.benchmark.empty() &&
       !circles::app_start_benchmark(*app, options.benchmark)) {
     std::fprintf(stderr, "can't benchmark %s: no such replay or map\n",
@@ -127,6 +119,7 @@ int main(int argc, char** argv) {
   auto  next_frame = std::chrono::steady_clock::now();
   auto& profiler = app->profiler;
   bool  skipped_intro = false;
+  bool  rendered_previous = true;
   using circles::FramePhase;
   while (!glfwWindowShouldClose(window) && !app->quit) {
     if (options.skip_intro && !skipped_intro &&
@@ -140,10 +133,16 @@ int main(int argc, char** argv) {
     }
     circles::profile_frame_begin(profiler,
                                  static_cast<circles::u8>(app->screen));
-    glfwPollEvents();
+    if (!rendered_previous && !app->frame_cap)
+      // Input and the drawable worker wake this immediately. With no events,
+      // request another timer update after 1 ms if there are no events.
+      glfwWaitEventsTimeout(0.001);
+    else
+      glfwPollEvents();
     circles::profile_phase(profiler, FramePhase::Poll);
     circles::app_frame(*app, glfwGetTime());
-    glfwSwapBuffers(window);
+    const bool rendered = circles::gpu_present();
+    rendered_previous = rendered;
     circles::profile_phase(profiler, FramePhase::Swap);
     next_frame += std::chrono::microseconds(app->frame_cap ? 1000 : 0);
     const auto now = std::chrono::steady_clock::now();
@@ -153,7 +152,7 @@ int main(int argc, char** argv) {
       std::this_thread::sleep_until(next_frame);
     circles::profile_phase(profiler, FramePhase::Sleep);
     circles::profile_frame_end(profiler, app->renderer.draw_calls,
-                               app->renderer.vertices_drawn);
+                               app->renderer.vertices_drawn, rendered);
     const bool timed_out = options.benchmark_seconds > 0 &&
                            std::chrono::steady_clock::now() - process_started >=
                                std::chrono::seconds(options.benchmark_seconds);

@@ -10,9 +10,12 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-# Rendering uses Apple's OpenGL 4.1 headers without a function loader.
+# Audio and input monitoring currently use macOS frameworks.
 if(NOT APPLE)
   message(FATAL_ERROR "circles currently supports macOS only")
+endif()
+if(CMAKE_OSX_DEPLOYMENT_TARGET AND CMAKE_OSX_DEPLOYMENT_TARGET VERSION_LESS "15.0")
+  message(FATAL_ERROR "circles requires macOS 15 or later for Metal's safe math mode")
 endif()
 
 find_package(PkgConfig REQUIRED)
@@ -35,13 +38,13 @@ add_library(circles_core STATIC
   src/circles/audio.cc
   src/circles/gameplay.cc
   src/circles/gfx.cc
-  src/circles/gl_upload.cc
   src/circles/health.cc
   src/circles/hit_objects.cc
   src/circles/judging.cc
   src/circles/library.cc
   src/circles/md5.cc
   src/circles/menu.cc
+  src/circles/metal.mm
   src/circles/mod_select.cc
   src/circles/mods.cc
   src/circles/profiler.cc
@@ -55,14 +58,20 @@ add_library(circles_core STATIC
   src/circles/stretch.cc
 )
 target_include_directories(circles_core PUBLIC src)
-target_compile_definitions(circles_core PUBLIC GL_SILENCE_DEPRECATION)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+  "${CMAKE_CURRENT_SOURCE_DIR}/shaders/circles.metal")
+file(READ shaders/circles.metal CIRCLES_METAL_SOURCE)
+configure_file(src/circles/metal_shader.h.in generated/metal_shader.h @ONLY)
+target_include_directories(circles_core PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated")
+set_source_files_properties(src/circles/metal.mm PROPERTIES
+  COMPILE_OPTIONS "-fobjc-arc")
 target_compile_options(circles_core PRIVATE -Wall -Wextra)
 # osu!stable computes one floating-point operation at a time; fused
 # multiply-adds would change its judgements' arithmetic.
 target_compile_options(circles_core PUBLIC -ffp-contract=off)
 target_link_libraries(circles_core PUBLIC
-  circles_third_party PkgConfig::GLFW PkgConfig::LZMA "-framework OpenGL"
-  "-framework AppKit")
+  circles_third_party PkgConfig::GLFW PkgConfig::LZMA
+  "-framework Metal" "-framework QuartzCore" "-framework AppKit")
 
 add_executable(circles src/circles/main.cc)
 target_compile_options(circles PRIVATE -Wall -Wextra)
@@ -83,14 +92,20 @@ if(BUILD_TESTING)
   add_custom_target(check COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure -C $<CONFIG> DEPENDS ${_test_targets} USES_TERMINAL)
 endif()
 
-# OpenGL output equivalence and upload lifetime checks need a graphics session.
+# Requires a logged-in macOS graphics session. Run separately from CPU tests.
 if(BUILD_TESTING)
-  add_executable(test_gl_render EXCLUDE_FROM_ALL tests/test_gl_render.cc)
-  target_include_directories(test_gl_render PRIVATE ${PROJECT_SOURCE_DIR})
-  target_compile_options(test_gl_render PRIVATE -Wall -Wextra -UNDEBUG)
-  target_link_libraries(test_gl_render PRIVATE circles_core)
-  add_custom_target(check-gl
-    COMMAND $<TARGET_FILE:test_gl_render>
-    WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
-    DEPENDS test_gl_render USES_TERMINAL)
+  add_executable(test_metal EXCLUDE_FROM_ALL tests/test_metal.cc)
+  target_include_directories(test_metal PRIVATE ${PROJECT_SOURCE_DIR})
+  target_compile_options(test_metal PRIVATE -Wall -Wextra -UNDEBUG)
+  target_link_libraries(test_metal PRIVATE circles_core)
+  add_executable(test_metal_scene EXCLUDE_FROM_ALL tests/test_metal_scene.cc)
+  target_include_directories(test_metal_scene PRIVATE ${PROJECT_SOURCE_DIR})
+  target_compile_definitions(test_metal_scene PRIVATE
+    CIRCLES_TEST_DIR="${PROJECT_SOURCE_DIR}/tests/fixtures")
+  target_compile_options(test_metal_scene PRIVATE -Wall -Wextra -UNDEBUG)
+  target_link_libraries(test_metal_scene PRIVATE circles_core)
+  add_custom_target(check-metal
+    COMMAND ${CMAKE_COMMAND} -E env MTL_DEBUG_LAYER=1 MTL_SHADER_VALIDATION=1 $<TARGET_FILE:test_metal>
+    COMMAND ${CMAKE_COMMAND} -E env MTL_DEBUG_LAYER=1 MTL_SHADER_VALIDATION=1 $<TARGET_FILE:test_metal_scene>
+    DEPENDS test_metal test_metal_scene USES_TERMINAL)
 endif()

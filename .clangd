@@ -1,6 +1,5 @@
 CompileFlags:
   CompilationDatabase: build
-  Add: [-DGL_SILENCE_DEPRECATION]
 InlayHints:
   Enabled: false
 Style: { AngledHeaders: ['^(circles|tests)/'] }

@@ -1,0 +1,7 @@
+#pragma once
+
+namespace circles {
+inline constexpr char kMetalShaderSource[] = R"METAL(
+@CIRCLES_METAL_SOURCE@
+)METAL";
+}
