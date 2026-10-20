@@ -79,7 +79,7 @@ static void test_close_objects_stack_up_and_left() {
 static void test_hard_rock_flips_the_playfield() {
   const auto objects = build(circles::kHardRock);
   CHECK_NEAR(objects[0].position.y, 384 - 100, 1e-3);
-  CHECK_NEAR(objects[1].path.back().y, 384 - 300, 1e-3);
+  CHECK_NEAR(objects[1].path_end.y, 384 - 300, 1e-3);
 }
 
 static void test_combos_count_from_the_second_colour() {

@@ -49,6 +49,7 @@ add_library(circles_core STATIC
   src/circles/results.cc
   src/circles/settings_menu.cc
   src/circles/skin.cc
+  src/circles/slider_body.cc
   src/circles/song_select.cc
   src/circles/stretch.cc
 )
@@ -67,7 +68,8 @@ target_compile_options(circles PRIVATE -Wall -Wextra)
 target_link_libraries(circles PRIVATE circles_core)
 
 if(BUILD_TESTING)
-  set(_tests rules archive skin hitsounds md5 replay stretch mods hit_objects)
+  set(_tests rules archive skin hitsounds md5 replay stretch mods hit_objects
+  slider_body)
   set(_test_targets)
   foreach(name IN LISTS _tests)
     list(APPEND _test_targets test_${name})

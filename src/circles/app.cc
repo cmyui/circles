@@ -126,6 +126,9 @@ bool accepting_input(const App& app) {
 }
 
 void enter_screen(App& app, Screen screen) {
+  // Slider bodies keep their textures only while they're drawn.
+  if (screen != Screen::Gameplay)
+    release_slider_bodies(app.game.bodies);
   app.screen = screen;
   switch (screen) {
     case Screen::MainMenu:
@@ -484,7 +487,7 @@ bool app_init(App& app) {
   glfwSetWindowSizeLimits(app.window, 800, 500, GLFW_DONT_CARE, GLFW_DONT_CARE);
 
   app.renderer = create_renderer();
-  app.slider_renderer = create_slider_renderer();
+  app.slider_bodies = create_slider_body_renderer();
   app.heavy = load_font(kFontPath, kFaceHeavy);
   app.bold = load_font(kFontPath, kFaceDemiBold);
   app.regular = load_font(kFontPath, kFaceMedium);
@@ -535,6 +538,8 @@ void app_frame(App& app, f64 now) {
   glfwGetFramebufferSize(app.window, &pixels_wide, &pixels_high);
   app.width = static_cast<f32>(width);
   app.height = static_cast<f32>(height);
+  app.pixel_width = pixels_wide;
+  app.pixel_height = pixels_high;
 
   ++app.fps_frames;
   if (now - app.fps_window_start >= 0.5) {
@@ -603,6 +608,7 @@ void app_frame(App& app, f64 now) {
 void app_shutdown(App& app) {
   if (app.backdrop.loading.valid())
     app.backdrop.loading.wait();
+  release_slider_bodies(app.game.bodies);
   destroy_skin(app.skin);
   audio_shutdown(app.audio);
   glfwDestroyWindow(app.window);

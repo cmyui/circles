@@ -878,46 +878,6 @@ void draw_approach_circle(App&             app,
               1 - radius * 0.09f / ring);
 }
 
-// Draws instanced circles along the path; see slider.frag.
-void draw_slider_body(App&                  app,
-                      std::span<const Vec2> centers,
-                      f32                   radius,
-                      Color                 body,
-                      Color                 border,
-                      f32                   alpha) {
-  flush(app.renderer);
-  const auto& s = app.slider_renderer;
-  glUseProgram(s.program);
-  glUniform2f(s.screen_size, app.width, app.height);
-  glUniform1f(s.radius, radius);
-  glUniform4f(s.body_colour, body.r, body.g, body.b, body.a);
-  glUniform4f(s.border_colour, border.r, border.g, border.b, border.a);
-  glUniform1f(s.border_width, 0.13f);
-  glUniform1f(s.alpha, alpha);
-  glBindVertexArray(s.vao);
-  glBindBuffer(GL_ARRAY_BUFFER, s.center_vbo);
-  glBufferData(GL_ARRAY_BUFFER, centers.size_bytes(), centers.data(),
-               GL_STREAM_DRAW);
-  const auto count = static_cast<GLsizei>(centers.size());
-  glEnable(GL_DEPTH_TEST);
-  glClear(GL_DEPTH_BUFFER_BIT);
-  // The first pass leaves each pixel's distance to the path in the depth
-  // buffer; the second shades only the fragment at that distance, so
-  // overlapping circles blend once.
-  glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
-  glDepthFunc(GL_LESS);
-  glDrawArraysInstanced(GL_TRIANGLES, 0, 6, count);
-  glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
-  glDepthMask(GL_FALSE);
-  glDepthFunc(GL_EQUAL);
-  glDrawArraysInstanced(GL_TRIANGLES, 0, 6, count);
-  glDepthMask(GL_TRUE);
-  glDepthFunc(GL_LESS);
-  glDisable(GL_DEPTH_TEST);
-  app.renderer.draw_calls += 2;
-  app.renderer.vertices_drawn += 12 * count;
-}
-
 // Points from `at` back along the slider, toward `toward`.
 void draw_reverse_arrow(App& app, Vec2 at, Vec2 toward, f32 radius, f32 alpha) {
   auto&     r = app.renderer;
@@ -962,21 +922,19 @@ void draw_slider(App&             app,
   const f32 appear = appear_alpha(game, object) * alpha;
   const f32 body_alpha =
       hidden ? hidden_body_alpha(game, object) * alpha : appear;
-  // The body grows from the head as the slider fades in.
-  const f32 snake = clamp01(static_cast<f32>(
-      (game.time - (object.time - game.preempt)) / (game.preempt / 3)));
+  // The body grows from the head over the first third of its approach, as
+  // stable's snaking does.
+  const f32 snake = std::min(
+      1.0f, static_cast<f32>(game.time - (object.time - game.preempt)) /
+                (static_cast<f32>(game.preempt) / 3));
   const i32 span = current_span(object, game.time);
 
   if (body_alpha > 0) {
-    const size_t count = std::min(
-        object.path.size(),
-        static_cast<size_t>(std::ceil(snake * (object.path.size() - 1))) + 1);
-    app.scratch.clear();
-    for (size_t k = 0; k < count; ++k)
-      app.scratch.push_back(field.to_screen(object.path[k]));
-    const Color track = skin.config.slider_track.value_or(shade(colour, 0.5f));
-    draw_slider_body(app, app.scratch, radius, fade(track, 0.85f),
-                     skin.config.slider_border.value_or(kWhite), body_alpha);
+    // Bodies are drawn for the playfield at rest; a shake or a fall moves
+    // the finished texture.
+    const Playfield rest = playfield(app);
+    draw_slider_body(app, index, colour, snake, rest.scale, {rest.x, rest.y},
+                     {field.x - rest.x, field.y - rest.y}, body_alpha);
   }
   if (appear > 0) {
     const auto* tick_image = skin_element(skin, "sliderscorepoint");
@@ -1013,16 +971,13 @@ void draw_slider(App&             app,
           hidden
               ? (span == 0 ? hidden_circle_alpha(game, object.time) * alpha : 0)
               : appear * 0.9f;
-      draw_hit_circle(app, field.to_screen(object.path.back()), radius, colour,
+      draw_hit_circle(app, field.to_screen(object.path_end), radius, colour,
                       end_alpha, 0, CirclePart::SliderEnd);
       // While repeats remain, an arrow marks where the ball turns back.
       if (span < object.slides - 1 && state.result == Judgement::None) {
-        const bool   at_end = span % 2 == 0;
-        const size_t inward = std::min<size_t>(object.path.size() - 1, 6);
-        const Vec2   turn = at_end ? object.path.back() : object.path.front();
-        const Vec2   toward = at_end
-                                  ? object.path[object.path.size() - 1 - inward]
-                                  : object.path[inward];
+        const bool at_end = span % 2 == 0;
+        const Vec2 turn = at_end ? object.path_end : object.position;
+        const Vec2 toward = at_end ? object.tail_inward : object.head_inward;
         if (!at_end && !hidden)
           draw_hit_circle(app, field.to_screen(turn), radius, colour, appear, 0,
                           CirclePart::SliderEnd);
@@ -1699,33 +1654,6 @@ void draw_game_overlays(App& app) {
 
 }  // namespace
 
-SliderRenderer create_slider_renderer() {
-  SliderRenderer s{};
-  s.program = load_program("shaders/slider.vert", "shaders/slider.frag");
-  s.screen_size = glGetUniformLocation(s.program, "u_screen_size");
-  s.radius = glGetUniformLocation(s.program, "u_radius");
-  s.body_colour = glGetUniformLocation(s.program, "u_body_colour");
-  s.border_colour = glGetUniformLocation(s.program, "u_border_colour");
-  s.border_width = glGetUniformLocation(s.program, "u_border_width");
-  s.alpha = glGetUniformLocation(s.program, "u_alpha");
-
-  glGenVertexArrays(1, &s.vao);
-  glBindVertexArray(s.vao);
-  // Every instance is a quad, corners in [-1, 1], centred on its path point.
-  constexpr f32 kCorners[] = {-1, -1, 1, -1, 1, 1, 1, 1, -1, 1, -1, -1};
-  glGenBuffers(1, &s.corner_vbo);
-  glBindBuffer(GL_ARRAY_BUFFER, s.corner_vbo);
-  glBufferData(GL_ARRAY_BUFFER, sizeof(kCorners), kCorners, GL_STATIC_DRAW);
-  glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 2 * sizeof(f32), nullptr);
-  glEnableVertexAttribArray(0);
-  glGenBuffers(1, &s.center_vbo);
-  glBindBuffer(GL_ARRAY_BUFFER, s.center_vbo);
-  glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, sizeof(Vec2), nullptr);
-  glEnableVertexAttribArray(1);
-  glVertexAttribDivisor(1, 1);
-  return s;
-}
-
 namespace {
 
 // Stable judges a replay at each of its frames. Between them its game loop
@@ -1778,6 +1706,7 @@ bool load_gameplay(App&        app,
     return false;
   const auto& info = app.library.maps[map_index];
   auto&       game = app.game;
+  release_slider_bodies(game.bodies);
   game = Gameplay{};
   game.started = app.now;
   game.map_index = map_index;
@@ -2188,6 +2117,7 @@ void gameplay_draw(App& app) {
       draw_approach_circle(app, field, i, alpha_scale);
     draw_popups(app, field, alpha_scale);
   }
+  sweep_slider_bodies(app);
   if (game.mods & kFlashlight)
     draw_flashlight(app, field);
   draw_hud(app);

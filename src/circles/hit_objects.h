@@ -8,6 +8,7 @@
 #include <circles/hitsounds.h>
 #include <circles/math.h>
 #include <circles/mods.h>
+#include <circles/slider_body.h>
 #include <circles/types.h>
 
 #include <fosu/beatmap.h>
@@ -63,7 +64,9 @@ struct GameObject {
   u32        slider = fosu::HitObject::kNoSlider;
   i32        slides = 1;
   f64        span_duration = 0;
-  std::vector<Vec2>        path;  // evenly spaced points along the body
+  BodyShape  body;
+  // Along the path from each end, for the reverse arrows to point at.
+  Vec2       head_inward{}, tail_inward{};
   std::vector<BallMove>    moves;
   std::vector<SliderPoint> points;  // in time order; the last is the end
   std::vector<Hitsound>    edge_hitsounds;  // the head, each repeat, the end
