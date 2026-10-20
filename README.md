@@ -89,6 +89,7 @@ with them. Hidden and Flashlight make S and SS grades silver.
 | F9 | Next skin (outside gameplay) |
 | F10 | Mouse buttons on or off for hitting, saved in `settings.txt` |
 | F11 | Fullscreen |
+| Ctrl+O | Settings (outside gameplay): background dim, 1000 fps cap and VSync. Changes apply immediately and are saved in `settings.txt` |
 | F1 | Mod select (song select) |
 
 In song select, type to search, use the arrow keys to choose, Enter to play
@@ -102,6 +103,10 @@ server can block drawable acquisition even with VSync off. Until a drawable is
 available, game updates continue without building an image. Each rendered image
 uses the latest game state and is submitted directly to the display layer.
 There is no offscreen-frame mailbox or extra fullscreen presentation copy.
+
+VSync synchronizes presentation to the display refresh rate. Enable it in
+Settings for steadier pacing; it is independent of the 1000 fps cap.
+`--vsync` enables it for a launch, overriding the saved preference.
 
 Upload buffers use three frame slots and are recycled only after GPU completion.
 Command buffers retain the textures and buffers they reference. Snaking sliders

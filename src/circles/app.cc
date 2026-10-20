@@ -44,6 +44,7 @@ struct Settings {
   Mods        mods = 0;
   f32         background_dim = 0.8f;
   bool        frame_cap = true;
+  bool        vsync = false;
 };
 
 Settings load_settings() {
@@ -68,6 +69,8 @@ Settings load_settings() {
       settings.mods = static_cast<Mods>(std::strtoul(value, nullptr, 10));
     else if (key == "frame_cap")
       settings.frame_cap = std::strtol(value, nullptr, 10) != 0;
+    else if (key == "vsync")
+      settings.vsync = std::strtol(value, nullptr, 10) != 0;
     else if (key == "background_dim")
       settings.background_dim =
           std::clamp(static_cast<f32>(std::strtod(value, nullptr)), 0.0f, 1.0f);
@@ -490,6 +493,8 @@ bool app_init(App& app) {
   app.mods = settings.mods;
   app.background_dim = settings.background_dim;
   app.frame_cap = settings.frame_cap;
+  app.vsync = settings.vsync;
+  gpu_set_vsync(app.vsync);
   set_master_volume(app.audio, settings.volume);
   const i32 imported =
       static_cast<i32>(import_archives(kBeatmapDirectory, ".osz").size());
@@ -859,6 +864,7 @@ void save_settings(const App& app) {
   file << "mods=" << app.mods << '\n';
   file << "background_dim=" << app.background_dim << '\n';
   file << "frame_cap=" << app.frame_cap << '\n';
+  file << "vsync=" << app.vsync << '\n';
 }
 
 std::string save_replay(App& app, i32 map, Replay replay) {

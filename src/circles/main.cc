@@ -100,8 +100,10 @@ int main(int argc, char** argv) {
   });
   if (options.width > 0 && options.height > 0)
     glfwSetWindowSize(window, options.width, options.height);
-  app->vsync = options.vsync;
-  circles::gpu_set_vsync(app->vsync);
+  if (options.vsync) {
+    app->vsync = true;
+    circles::gpu_set_vsync(true);
+  }
   if (!options.benchmark.empty() &&
       !circles::app_start_benchmark(*app, options.benchmark)) {
     std::fprintf(stderr, "can't benchmark %s: no such replay or map\n",
