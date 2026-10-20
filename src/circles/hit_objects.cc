@@ -186,6 +186,14 @@ std::vector<GameObject> build_hit_objects(const fosu::Beatmap&  map,
                                  event.span_index, offset(event.position)});
       if (path.points.size() > 1)
         add_ball_moves(object, path, map.slider_velocities[hit.slider] * 1000);
+      object.body = build_body_shape(path, object.position,
+                                     map.sliders[hit.slider].length);
+      // About as far in as a reverse arrow reaches.
+      const f64 inward = path.distance() > 0
+                             ? std::min(18.0, path.distance()) / path.distance()
+                             : 0;
+      object.head_inward = offset(fosu::slider_position_at(path, inward));
+      object.tail_inward = offset(fosu::slider_position_at(path, 1 - inward));
     }
     objects.push_back(std::move(object));
   }
@@ -218,24 +226,6 @@ std::vector<GameObject> build_hit_objects(const fosu::Beatmap&  map,
     }
     object.combo_number = number;
     object.colour = combo;
-  }
-
-  // Evenly spaced points along each body, for drawing it.
-  for (GameObject& object : objects) {
-    if (object.kind != ObjectKind::Slider)
-      continue;
-    constexpr f32 kSpacing = 3;
-    object.path.push_back(object.position);
-    for (size_t m = 0; m < object.moves.size(); ++m) {
-      const BallMove& move = object.moves[m];
-      if (object.slides > 1 && m == object.moves.size() / object.slides)
-        break;  // one pass covers the body
-      const f32 length = (move.to - move.from).length();
-      const i32 steps = std::max(1, static_cast<i32>(length / kSpacing));
-      for (i32 s = 1; s <= steps; ++s)
-        object.path.push_back(
-            lerp(move.from, move.to, static_cast<f32>(s) / steps));
-    }
   }
   return objects;
 }

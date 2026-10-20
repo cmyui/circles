@@ -91,12 +91,19 @@ void reserve(Renderer& r, size_t vertex_count) {
     flush(r);
 }
 
-// Shapes that don't sample a texture share a batch with whatever is bound.
-void use_texture(Renderer& r, GLuint texture) {
-  if (texture == r.texture)
-    return;
-  flush(r);
-  r.texture = texture;
+// A slot in the batch for `texture`, which vertices name in their last
+// parameter. A batch samples several textures, so switching between them
+// doesn't end it.
+f32 use_texture(Renderer& r, GLuint texture) {
+  for (i32 slot = 0; slot < r.texture_count; ++slot)
+    if (r.textures[slot] == texture)
+      return static_cast<f32>(slot);
+  if (r.texture_count == static_cast<i32>(r.textures.size())) {
+    flush(r);
+    r.texture_count = 0;
+  }
+  r.textures[r.texture_count] = texture;
+  return static_cast<f32>(r.texture_count++);
 }
 
 void vertex(Renderer& r, f32 x, f32 y, f32 u, f32 v, Color c, Params p) {
@@ -159,9 +166,9 @@ void draw_glyphs(Renderer&        r,
     const f32 width = measure_text(font, text, size);
     x -= align == Align::Center ? width / 2 : width;
   }
-  use_texture(r, font.atlas.id);
-  f32  pen = x;
-  char previous = 0;
+  const f32 slot = use_texture(r, font.atlas.id);
+  f32       pen = x;
+  char      previous = 0;
   for (char c : text) {
     const Glyph* glyph = find_glyph(font, c);
     if (!glyph)
@@ -171,7 +178,7 @@ void draw_glyphs(Renderer&        r,
     rect_quad(r, pen + glyph->x0 * size, baseline + glyph->y0 * size,
               pen + glyph->x1 * size, baseline + glyph->y1 * size, glyph->u0,
               glyph->v0, glyph->u1, glyph->v1, color, color,
-              {kKindGlyph, dilate, softness, 0});
+              {kKindGlyph, dilate, softness, slot});
     pen += glyph->advance * size;
   }
 }
@@ -216,6 +223,9 @@ Texture upload_texture(const Image& image) {
   Texture texture{.width = image.width, .height = image.height};
   if (image.pixels.empty())
     return texture;
+  texture.blank = true;
+  for (size_t i = 3; i < image.pixels.size() && texture.blank; i += 4)
+    texture.blank = image.pixels[i] == 0;
   glGenTextures(1, &texture.id);
   glBindTexture(GL_TEXTURE_2D, texture.id);
   glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, image.width, image.height, 0,
@@ -362,10 +372,14 @@ Renderer create_renderer() {
   for (GLuint i = 0; i < 4; ++i)
     glEnableVertexAttribArray(i);
   r.vertices.reserve(kMaxBatchVertices * kFloatsPerVertex);
-  // Shapes that don't sample still need a complete texture bound.
-  r.texture =
+  // Slots no vertex samples still need a complete texture bound.
+  r.blank =
       upload_texture({.pixels = {255, 255, 255, 255}, .width = 1, .height = 1})
           .id;
+  glUseProgram(r.program);
+  constexpr GLint kUnits[] = {0, 1, 2, 3, 4, 5, 6, 7};
+  glUniform1iv(glGetUniformLocation(r.program, "u_textures"),
+               static_cast<GLsizei>(r.textures.size()), kUnits);
   return r;
 }
 
@@ -373,6 +387,7 @@ void begin_frame(Renderer& r, f32 width, f32 height) {
   r.width = width;
   r.height = height;
   r.vertices.clear();
+  r.texture_count = 0;
   r.draw_calls = 0;
   r.vertices_drawn = 0;
 }
@@ -382,8 +397,12 @@ void flush(Renderer& r) {
     return;
   glUseProgram(r.program);
   glUniform2f(r.screen_size_location, r.width, r.height);
+  for (i32 slot = 0; slot < static_cast<i32>(r.textures.size()); ++slot) {
+    glActiveTexture(GL_TEXTURE0 + slot);
+    glBindTexture(GL_TEXTURE_2D,
+                  slot < r.texture_count ? r.textures[slot] : r.blank);
+  }
   glActiveTexture(GL_TEXTURE0);
-  glBindTexture(GL_TEXTURE_2D, r.texture);
   glBindVertexArray(r.vao);
   glBindBuffer(GL_ARRAY_BUFFER, r.vbo);
   glBufferData(GL_ARRAY_BUFFER, r.vertices.size() * sizeof(f32),
@@ -552,9 +571,9 @@ void draw_image_region(Renderer&      r,
                        Color          tint) {
   if (!texture.id)
     return;
-  use_texture(r, texture.id);
+  const f32 slot = use_texture(r, texture.id);
   rect_quad(r, x, y, x + w, y + h, u0, v0, u1, v1, tint, tint,
-            {kKindTexture, 0, 0, 0});
+            {kKindTexture, 0, 0, slot});
 }
 
 void draw_sprite(Renderer&      r,
@@ -565,17 +584,17 @@ void draw_sprite(Renderer&      r,
                  f32            h,
                  f32            angle,
                  Color          tint) {
-  if (!texture.id)
+  if (!texture.id || texture.blank)
     return;
-  use_texture(r, texture.id);
-  reserve(r, 6);
+  const f32    slot = use_texture(r, texture.id);
   // y points down, so a positive angle turns clockwise on screen.
   const f32    c = std::cos(angle), s = std::sin(angle);
-  const Params p{kKindTexture, 0, 0, 0};
+  const Params p{kKindTexture, 0, 0, slot};
   auto         corner = [&](f32 u, f32 v) {
     const f32 dx = (u - 0.5f) * w, dy = (v - 0.5f) * h;
     vertex(r, cx + dx * c - dy * s, cy + dx * s + dy * c, u, v, tint, p);
   };
+  reserve(r, 6);
   corner(0, 0);
   corner(1, 0);
   corner(1, 1);
@@ -609,10 +628,10 @@ void draw_image_cover(Renderer&      r,
   // of the rectangle along both axes however much of the image is cropped.
   const f32  center_u = 0.5f + shift_x * (cover_u - visible_u) / 2;
   const f32  center_v = 0.5f + shift_y * (cover_v - visible_v) / 2;
-  use_texture(r, texture.id);
+  const f32  slot = use_texture(r, texture.id);
   rect_quad(r, x, y, x + w, y + h, center_u - visible_u / 2,
             center_v - visible_v / 2, center_u + visible_u / 2,
-            center_v + visible_v / 2, tint, tint, {kKindTexture, 0, 0, 0});
+            center_v + visible_v / 2, tint, tint, {kKindTexture, 0, 0, slot});
 }
 
 void draw_text(Renderer&        r,

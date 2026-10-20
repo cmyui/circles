@@ -4,7 +4,8 @@ in vec2 v_uv;
 in vec4 v_color;
 flat in vec4 v_params;
 
-uniform sampler2D u_texture;
+// The batch's textures; textured kinds name theirs in v_params.w.
+uniform sampler2D u_textures[8];
 
 out vec4 frag_color;
 
@@ -29,16 +30,30 @@ float coverage(float dist, float pixel) {
   return clamp(0.5 - dist / pixel, 0.0, 1.0);
 }
 
+// GLSL 4.1 indexes sampler arrays only with constants.
+vec4 sample_texture(vec2 uv) {
+  switch (int(v_params.w + 0.5)) {
+    case 0: return texture(u_textures[0], uv);
+    case 1: return texture(u_textures[1], uv);
+    case 2: return texture(u_textures[2], uv);
+    case 3: return texture(u_textures[3], uv);
+    case 4: return texture(u_textures[4], uv);
+    case 5: return texture(u_textures[5], uv);
+    case 6: return texture(u_textures[6], uv);
+    default: return texture(u_textures[7], uv);
+  }
+}
+
 void main() {
   int kind = int(v_params.x + 0.5);
   float alpha = 1.0;
 
   if (kind == KIND_TEXTURE) {
-    frag_color = texture(u_texture, v_uv) * v_color;
+    frag_color = sample_texture(v_uv) * v_color;
     return;
   } else if (kind == KIND_GLYPH) {
     // Parameters: dilation (moves the edge outward), extra softness.
-    float dist = texture(u_texture, v_uv).r;
+    float dist = sample_texture(v_uv).r;
     float edge = GLYPH_ON_EDGE - v_params.y;
     float half_width = max(0.5 * fwidth(dist), 1e-4) + v_params.z;
     alpha = smoothstep(edge - half_width, edge + half_width, dist);

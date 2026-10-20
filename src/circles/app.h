@@ -99,6 +99,7 @@ struct Gameplay {
   i32                            map_index = -1;
   std::vector<GameObject>        objects;
   std::vector<ObjectState>       states;
+  SliderBodies                   bodies;  // the visible sliders'
   std::vector<Color>             combo_colours;
   f64                            radius = 0;
   f64                            preempt = 0;
@@ -272,20 +273,6 @@ struct SongSelect {
   i32              hovered_mod = -1;           // buttons numbered row by row
 };
 
-// Draws slider bodies; see slider.frag.
-struct SliderRenderer {
-  GLuint program;
-  GLuint vao;
-  GLuint corner_vbo;
-  GLuint center_vbo;
-  GLint  screen_size;
-  GLint  radius;
-  GLint  body_colour;
-  GLint  border_colour;
-  GLint  border_width;
-  GLint  alpha;
-};
-
 // The background image, loaded off the main thread and cross-faded in.
 struct Backdrop {
   std::string        path;  // requested
@@ -303,10 +290,12 @@ struct App {
   GLFWwindow*              window = nullptr;
   f32                      width = 0;  // window size in points
   f32                      height = 0;
+  i32                      pixel_width = 0;  // framebuffer size
+  i32                      pixel_height = 0;
   f64                      now = 0;  // wall seconds
   f32                      dt = 0;
   Renderer                 renderer;
-  SliderRenderer           slider_renderer;
+  SliderBodyRenderer       slider_bodies;
   Font                     heavy;
   Font                     bold;
   Font                     regular;
@@ -356,7 +345,6 @@ struct App {
   Vec2                   cursor{};
   f64                    cursor_moved = -1e9;  // wall seconds
   std::deque<TrailPoint> trail;
-  std::vector<Vec2>      scratch;  // a slider body's points this frame
   bool                   fullscreen = false;
   i32                    windowed[4] = {};  // x, y, width, height to restore
 
@@ -484,7 +472,6 @@ f32 draw_mod_icons(App&  app,
 f32 mod_icon_height(const App& app);
 
 // gameplay.cc
-SliderRenderer create_slider_renderer();
 // Plays the map, or watches the replay at `replay_path` on it.
 bool gameplay_start(App& app, i32 map, std::string replay_path = {});
 // Judges the replay at `replay_path` silently, start to end, without touching

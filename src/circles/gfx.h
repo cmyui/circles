@@ -6,6 +6,7 @@
 #include <circles/types.h>
 
 #include <OpenGL/gl3.h>
+#include <array>
 #include <stb_truetype.h>
 #include <string>
 #include <string_view>
@@ -56,9 +57,12 @@ struct Texture {
   GLuint id = 0;
   i32    width = 0;
   i32    height = 0;
+  // Fully transparent, so drawing it changes nothing. Skins ship such
+  // placeholders, which can be large.
+  bool   blank = false;
 };
 
-// Empty on failure.
+// Empty on failure. upload_texture marks a fully transparent image blank.
 Image load_image(const std::string& path);
 Texture upload_texture(const Image& image);
 void destroy_texture(Texture& texture);
@@ -110,17 +114,20 @@ inline f32 centered_baseline(const Font& font, f32 size, f32 center_y) {
 enum class Align : u8 { Left, Center, Right };
 
 struct Renderer {
-  GLuint           program;
-  GLuint           vao;
-  GLuint           vbo;
-  GLint            screen_size_location;
-  std::vector<f32> vertices;
-  GLuint           texture = 0;  // sampled by the batched vertices
-  f32              width = 0;    // window size in points
-  f32              height = 0;
+  GLuint                program;
+  GLuint                vao;
+  GLuint                vbo;
+  GLint                 screen_size_location;
+  std::vector<f32>      vertices;
+  // The textures the batched vertices sample, by slot, each on its own unit.
+  std::array<GLuint, 8> textures{};
+  i32                   texture_count = 0;
+  GLuint                blank = 0;  // a white texel, for unused slots
+  f32                   width = 0;  // window size in points
+  f32                   height = 0;
   // This frame's draws, for profiling.
-  u32              draw_calls = 0;
-  u32              vertices_drawn = 0;
+  u32                   draw_calls = 0;
+  u32                   vertices_drawn = 0;
 };
 
 Renderer create_renderer();
