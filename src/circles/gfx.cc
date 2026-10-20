@@ -1,4 +1,5 @@
 #include <circles/gfx.h>
+#include <circles/metal.h>
 
 #include <algorithm>
 #include <cmath>
@@ -6,48 +7,19 @@
 #include <cstdlib>
 #include <fstream>
 #include <iterator>
-#include <sstream>
 #include <stb_image.h>
 
 namespace circles {
 
 namespace {
 
-std::string read_text_file(const char* path) {
-  std::ifstream file(path);
-  if (!file) {
-    fprintf(stderr, "failed to open %s\n", path);
-    exit(1);
-  }
-  std::stringstream ss;
-  ss << file.rdbuf();
-  return ss.str();
-}
-
-GLuint compile_shader(GLenum type, const char* path) {
-  const std::string source = read_text_file(path);
-  const char*       src = source.c_str();
-  const GLuint      shader = glCreateShader(type);
-  glShaderSource(shader, 1, &src, nullptr);
-  glCompileShader(shader);
-
-  GLint ok;
-  glGetShaderiv(shader, GL_COMPILE_STATUS, &ok);
-  if (!ok) {
-    char log[1024];
-    glGetShaderInfoLog(shader, sizeof(log), nullptr, log);
-    fprintf(stderr, "%s:\n%s\n", path, log);
-    exit(1);
-  }
-  return shader;
-}
-
 // Glyphs are stored at this many pixels per em. The SDF stays sharp when drawn
 // larger or smaller, so this only needs to keep the glyphs' detail.
 constexpr f32 kSdfEmPixels = 64;
 // Pixels of distance stored around each glyph's outline.
 constexpr i32 kSdfPadding = 8;
-// The value stored on the outline itself; sprite.frag uses the same (128/255).
+// The value stored on the outline itself; circles.metal uses the same
+// (128/255).
 constexpr u8  kSdfOnEdge = 128;
 constexpr i32 kAtlasWidth = 1024;
 
@@ -66,7 +38,7 @@ f32 kerning(const Font& font, char previous, char c) {
          font.ems_per_unit;
 }
 
-// How sprite.frag shades a primitive; must match the constants there.
+// How circles.metal shades a primitive; must match the constants there.
 enum Kind : i32 {
   kKindSolid,
   kKindTexture,
@@ -94,7 +66,7 @@ void reserve(Renderer& r, size_t vertex_count) {
 // A slot in the batch for `texture`, which vertices name in their last
 // parameter. A batch samples several textures, so switching between them
 // doesn't end it.
-f32 use_texture(Renderer& r, GLuint texture) {
+f32 use_texture(Renderer& r, u32 texture) {
   for (i32 slot = 0; slot < r.texture_count; ++slot)
     if (r.textures[slot] == texture)
       return static_cast<f32>(slot);
@@ -185,27 +157,6 @@ void draw_glyphs(Renderer&        r,
 
 }  // namespace
 
-GLuint load_program(const char* vertex_path, const char* fragment_path) {
-  const GLuint vs = compile_shader(GL_VERTEX_SHADER, vertex_path);
-  const GLuint fs = compile_shader(GL_FRAGMENT_SHADER, fragment_path);
-  const GLuint program = glCreateProgram();
-  glAttachShader(program, vs);
-  glAttachShader(program, fs);
-  glLinkProgram(program);
-
-  GLint ok;
-  glGetProgramiv(program, GL_LINK_STATUS, &ok);
-  if (!ok) {
-    char log[1024];
-    glGetProgramInfoLog(program, sizeof(log), nullptr, log);
-    fprintf(stderr, "link %s + %s:\n%s\n", vertex_path, fragment_path, log);
-    exit(1);
-  }
-  glDeleteShader(vs);
-  glDeleteShader(fs);
-  return program;
-}
-
 Image load_image(const std::string& path) {
   Image image;
   i32   channels;
@@ -226,24 +177,14 @@ Texture upload_texture(const Image& image) {
   texture.blank = true;
   for (size_t i = 3; i < image.pixels.size() && texture.blank; i += 4)
     texture.blank = image.pixels[i] == 0;
-  glGenTextures(1, &texture.id);
-  glBindTexture(GL_TEXTURE_2D, texture.id);
-  glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, image.width, image.height, 0,
-               GL_RGBA, GL_UNSIGNED_BYTE, image.pixels.data());
-  // Backgrounds usually draw smaller than their resolution; mipmaps keep them
-  // smooth.
-  glGenerateMipmap(GL_TEXTURE_2D);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER,
-                  GL_LINEAR_MIPMAP_LINEAR);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+  texture.id =
+      gpu_upload(image.pixels.data(), image.width, image.height, false, true);
   return texture;
 }
 
 void destroy_texture(Texture& texture) {
   if (texture.id)
-    glDeleteTextures(1, &texture.id);
+    gpu_destroy_texture(texture.id);
   texture = {};
 }
 
@@ -327,16 +268,8 @@ Font load_font(const char* path, i32 index) {
   }
 
   font.atlas = {.width = kAtlasWidth, .height = atlas_height};
-  glGenTextures(1, &font.atlas.id);
-  glBindTexture(GL_TEXTURE_2D, font.atlas.id);
-  glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, kAtlasWidth, atlas_height, 0, GL_RED,
-               GL_UNSIGNED_BYTE, atlas.data());
-  // Linear filtering blends neighbouring distances, keeping edges smooth at
-  // any scale.
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+  font.atlas.id =
+      gpu_upload(atlas.data(), kAtlasWidth, atlas_height, true, false);
   return font;
 }
 
@@ -355,31 +288,11 @@ f32 measure_text(const Font& font, std::string_view text, f32 size) {
 
 Renderer create_renderer() {
   Renderer r{};
-  r.program = load_program("shaders/sprite.vert", "shaders/sprite.frag");
-  r.screen_size_location = glGetUniformLocation(r.program, "u_screen_size");
-  glGenVertexArrays(1, &r.vao);
-  glBindVertexArray(r.vao);
-  glGenBuffers(1, &r.vbo);
-  glBindBuffer(GL_ARRAY_BUFFER, r.vbo);
-  constexpr GLsizei kStride = kFloatsPerVertex * sizeof(f32);
-  glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, kStride, nullptr);
-  glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, kStride,
-                        reinterpret_cast<void*>(2 * sizeof(f32)));
-  glVertexAttribPointer(2, 4, GL_FLOAT, GL_FALSE, kStride,
-                        reinterpret_cast<void*>(4 * sizeof(f32)));
-  glVertexAttribPointer(3, 4, GL_FLOAT, GL_FALSE, kStride,
-                        reinterpret_cast<void*>(8 * sizeof(f32)));
-  for (GLuint i = 0; i < 4; ++i)
-    glEnableVertexAttribArray(i);
   r.vertices.reserve(kMaxBatchVertices * kFloatsPerVertex);
   // Slots no vertex samples still need a complete texture bound.
   r.blank =
       upload_texture({.pixels = {255, 255, 255, 255}, .width = 1, .height = 1})
           .id;
-  glUseProgram(r.program);
-  constexpr GLint kUnits[] = {0, 1, 2, 3, 4, 5, 6, 7};
-  glUniform1iv(glGetUniformLocation(r.program, "u_textures"),
-               static_cast<GLsizei>(r.textures.size()), kUnits);
   return r;
 }
 
@@ -395,20 +308,11 @@ void begin_frame(Renderer& r, f32 width, f32 height) {
 void flush(Renderer& r) {
   if (r.vertices.empty())
     return;
-  glUseProgram(r.program);
-  glUniform2f(r.screen_size_location, r.width, r.height);
-  for (i32 slot = 0; slot < static_cast<i32>(r.textures.size()); ++slot) {
-    glActiveTexture(GL_TEXTURE0 + slot);
-    glBindTexture(GL_TEXTURE_2D,
-                  slot < r.texture_count ? r.textures[slot] : r.blank);
-  }
-  glActiveTexture(GL_TEXTURE0);
-  glBindVertexArray(r.vao);
-  glBindBuffer(GL_ARRAY_BUFFER, r.vbo);
-  glBufferData(GL_ARRAY_BUFFER, r.vertices.size() * sizeof(f32),
-               r.vertices.data(), GL_STREAM_DRAW);
-  const auto count = static_cast<GLsizei>(r.vertices.size() / kFloatsPerVertex);
-  glDrawArrays(GL_TRIANGLES, 0, count);
+  const auto count = static_cast<u32>(r.vertices.size() / kFloatsPerVertex);
+  auto       textures = r.textures;
+  for (size_t i = r.texture_count; i < textures.size(); ++i)
+    textures[i] = r.blank;
+  gpu_draw_sprites(r.vertices, textures, r.width, r.height);
   ++r.draw_calls;
   r.vertices_drawn += count;
   r.vertices.clear();

@@ -1,5 +1,6 @@
 #include <circles/app.h>
 #include <circles/archive.h>
+#include <circles/metal.h>
 #include <circles/strings.h>
 
 #include <algorithm>
@@ -43,6 +44,7 @@ struct Settings {
   Mods        mods = 0;
   f32         background_dim = 0.8f;
   bool        frame_cap = true;
+  bool        vsync = false;
 };
 
 Settings load_settings() {
@@ -67,6 +69,8 @@ Settings load_settings() {
       settings.mods = static_cast<Mods>(std::strtoul(value, nullptr, 10));
     else if (key == "frame_cap")
       settings.frame_cap = std::strtol(value, nullptr, 10) != 0;
+    else if (key == "vsync")
+      settings.vsync = std::strtol(value, nullptr, 10) != 0;
     else if (key == "background_dim")
       settings.background_dim =
           std::clamp(static_cast<f32>(std::strtod(value, nullptr)), 0.0f, 1.0f);
@@ -206,7 +210,7 @@ void toggle_fullscreen(App& app) {
     glfwSetWindowMonitor(app.window, monitor, 0, 0, mode->width, mode->height,
                          mode->refreshRate);
   }
-  glfwSwapInterval(app.vsync ? 1 : 0);
+  gpu_set_vsync(app.vsync);
   app.fullscreen = !app.fullscreen;
 }
 
@@ -336,7 +340,7 @@ void draw_profiler_overlay(App& app) {
   char      line[256];
   const f32 n = static_cast<f32>(std::max(count, 1));
   snprintf(line, sizeof(line),
-           "Profiling (F8 saves)   %d fps   frame p50 %.2f  p99 %.2f ms", count,
+           "Profiling (F8 saves)   %d updates/s   p50 %.2f  p99 %.2f ms", count,
            percentile(frame_ms, 0.5f), percentile(frame_ms, 0.99f));
   draw_text(r, app.regular, line, x + 10, y + 20, 12, kWhite);
   snprintf(line, sizeof(line),
@@ -466,33 +470,21 @@ void draw_overlays(App& app) {
 bool app_init(App& app) {
   if (!glfwInit())
     return false;
-  // macOS supports OpenGL up to 4.1, only via a forward-compatible core
-  // profile.
-  glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
-  glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 1);
-  glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
-  glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
-  glfwWindowHint(GLFW_DEPTH_BITS, 24);
+  glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
   app.window = glfwCreateWindow(1280, 720, "circles", nullptr, nullptr);
   if (!app.window) {
     glfwTerminate();
     return false;
   }
-  glfwMakeContextCurrent(app.window);
-  // Hits are timed when a frame reads input, so frames don't wait for the
-  // display; main() caps their rate instead.
-  glfwSwapInterval(0);
+  gpu_init(app.window);
   profiler_init(app.profiler);
   glfwSetInputMode(app.window, GLFW_CURSOR, GLFW_CURSOR_HIDDEN);
   glfwSetWindowSizeLimits(app.window, 800, 500, GLFW_DONT_CARE, GLFW_DONT_CARE);
 
   app.renderer = create_renderer();
-  app.slider_bodies = create_slider_body_renderer();
   app.heavy = load_font(kFontPath, kFaceHeavy);
   app.bold = load_font(kFontPath, kFaceDemiBold);
   app.regular = load_font(kFontPath, kFaceMedium);
-  glEnable(GL_BLEND);
-  glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
   const bool     audio = audio_init(app.audio);
   const Settings settings = load_settings();
@@ -501,6 +493,8 @@ bool app_init(App& app) {
   app.mods = settings.mods;
   app.background_dim = settings.background_dim;
   app.frame_cap = settings.frame_cap;
+  app.vsync = settings.vsync;
+  gpu_set_vsync(app.vsync);
   set_master_volume(app.audio, settings.volume);
   const i32 imported =
       static_cast<i32>(import_archives(kBeatmapDirectory, ".osz").size());
@@ -541,7 +535,6 @@ void app_frame(App& app, f64 now) {
   app.pixel_width = pixels_wide;
   app.pixel_height = pixels_high;
 
-  ++app.fps_frames;
   if (now - app.fps_window_start >= 0.5) {
     app.fps = static_cast<i32>(
         std::lround(app.fps_frames / (now - app.fps_window_start)));
@@ -580,10 +573,13 @@ void app_frame(App& app, f64 now) {
   }
   profile_phase(app.profiler, FramePhase::Update);
 
+  if (pixels_wide <= 0 || pixels_high <= 0 || !gpu_begin_frame()) {
+    app.renderer.draw_calls = app.renderer.vertices_drawn = 0;
+    profile_phase(app.profiler, FramePhase::Draw);
+    return;
+  }
+  ++app.fps_frames;
   profile_gpu_begin(app.profiler);
-  glViewport(0, 0, pixels_wide, pixels_high);
-  glClearColor(0, 0, 0, 1);
-  glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
   begin_frame(app.renderer, app.width, app.height);
   switch (app.screen) {
     case Screen::MainMenu:
@@ -611,6 +607,7 @@ void app_shutdown(App& app) {
   release_slider_bodies(app.game.bodies);
   destroy_skin(app.skin);
   audio_shutdown(app.audio);
+  gpu_shutdown();
   glfwDestroyWindow(app.window);
   glfwTerminate();
 }
@@ -867,6 +864,7 @@ void save_settings(const App& app) {
   file << "mods=" << app.mods << '\n';
   file << "background_dim=" << app.background_dim << '\n';
   file << "frame_cap=" << app.frame_cap << '\n';
+  file << "vsync=" << app.vsync << '\n';
 }
 
 std::string save_replay(App& app, i32 map, Replay replay) {

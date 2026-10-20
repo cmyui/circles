@@ -1,7 +1,7 @@
 // The settings panel, opened with Ctrl+O as osu! opens its options, anywhere
-// but in a map: the gameplay background dim, where 100% hides the
-// background, and whether frames are capped at 1000 per second.
+// but in a map: background dim, the 1000 fps cap, and VSync.
 #include <circles/app.h>
+#include <circles/metal.h>
 
 #include <algorithm>
 #include <cstdio>
@@ -12,18 +12,19 @@ namespace {
 
 constexpr f32 kDimStep = 0.05f;
 
-enum Row : i32 { kDimRow, kFrameCapRow, kRowCount };
+enum Row : i32 { kDimRow, kFrameCapRow, kVsyncRow, kRowCount };
 
 struct PanelLayout {
   f32 x, y, w, h;
   f32 track_x, track_y, track_w;
   f32 cap_y;  // the frame cap row's centre
+  f32 vsync_y;
 };
 
 PanelLayout panel_layout(const App& app) {
-  constexpr f32 w = 460, h = 250;
+  constexpr f32 w = 460, h = 302;
   const f32     x = (app.width - w) / 2, y = (app.height - h) / 2;
-  return {x, y, w, h, x + 32, y + 118, w - 64, y + 172};
+  return {x, y, w, h, x + 32, y + 118, w - 64, y + 172, y + 224};
 }
 
 bool over_track(const App& app) {
@@ -35,6 +36,11 @@ bool over_track(const App& app) {
 bool over_frame_cap(const App& app) {
   const PanelLayout p = panel_layout(app);
   return contains(app.cursor, p.x + 16, p.cap_y - 20, p.w - 32, 40);
+}
+
+bool over_vsync(const App& app) {
+  const PanelLayout p = panel_layout(app);
+  return contains(app.cursor, p.x + 16, p.vsync_y - 20, p.w - 32, 40);
 }
 
 void set_dim(App& app, f32 dim) {
@@ -57,6 +63,13 @@ void dim_from_cursor(App& app) {
 
 void toggle_frame_cap(App& app) {
   app.frame_cap = !app.frame_cap;
+  save_settings(app);
+  play_sound(app.audio, Sound::MenuClick, 0.5f);
+}
+
+void toggle_vsync(App& app) {
+  app.vsync = !app.vsync;
+  gpu_set_vsync(app.vsync);
   save_settings(app);
   play_sound(app.audio, Sound::MenuClick, 0.5f);
 }
@@ -84,10 +97,12 @@ void settings_key(App& app, i32 key, i32 action) {
   } else if (menu.selected == kDimRow &&
              (key == GLFW_KEY_LEFT || key == GLFW_KEY_RIGHT)) {
     step_dim(app, key == GLFW_KEY_RIGHT ? kDimStep : -kDimStep);
-  } else if (menu.selected == kFrameCapRow && press &&
-             (key == GLFW_KEY_LEFT || key == GLFW_KEY_RIGHT ||
-              key == GLFW_KEY_ENTER || key == GLFW_KEY_SPACE)) {
-    toggle_frame_cap(app);
+  } else if (press && (key == GLFW_KEY_LEFT || key == GLFW_KEY_RIGHT ||
+                       key == GLFW_KEY_ENTER || key == GLFW_KEY_SPACE)) {
+    if (menu.selected == kFrameCapRow)
+      toggle_frame_cap(app);
+    else if (menu.selected == kVsyncRow)
+      toggle_vsync(app);
   }
 }
 
@@ -107,6 +122,9 @@ void settings_click(App& app, i32 button, i32 action) {
   } else if (over_frame_cap(app)) {
     menu.selected = kFrameCapRow;
     toggle_frame_cap(app);
+  } else if (over_vsync(app)) {
+    menu.selected = kVsyncRow;
+    toggle_vsync(app);
   } else if (!contains(app.cursor, p.x, p.y, p.w, p.h)) {
     toggle_settings(app);
   }
@@ -130,7 +148,9 @@ void settings_draw(App& app) {
   draw_text_shadowed(r, app.heavy, "Settings", p.x + 32, p.y + lift + 50, 28,
                      fade(kWhite, appear));
   // The row the keys change.
-  const f32 selected_y = menu.selected == kDimRow ? p.y + 72 : p.cap_y - 22;
+  const f32 selected_y = menu.selected == kDimRow        ? p.y + 72
+                         : menu.selected == kFrameCapRow ? p.cap_y - 22
+                                                         : p.vsync_y - 22;
   draw_rounded_rect(r, p.x + 16, selected_y + lift, p.w - 32,
                     menu.selected == kDimRow ? 66 : 44, 10,
                     fade(kWhite, 0.06f * appear));
@@ -154,18 +174,21 @@ void settings_draw(App& app) {
   draw_circle(r, p.track_x + fill, track_y, 9 + 2 * hover,
               fade(kWhite, appear));
 
-  const f32 cap_y = p.cap_y + lift;
-  draw_text(r, app.bold, "Cap frames at 1000 fps", p.x + 32,
-            centered_baseline(app.bold, 17, cap_y), 17, fade(kWhite, appear));
-  // An on/off switch.
-  constexpr f32 kSwitchW = 46, kSwitchH = 26;
-  const f32     switch_x = p.x + p.w - 32 - kSwitchW;
-  draw_rounded_rect(
-      r, switch_x, cap_y - kSwitchH / 2, kSwitchW, kSwitchH, kSwitchH / 2,
-      fade(app.frame_cap ? hex_color(0x8844CC) : hex_color(0x3A3A55), appear));
-  const f32 knob_x = app.frame_cap ? switch_x + kSwitchW - kSwitchH / 2
-                                   : switch_x + kSwitchH / 2;
-  draw_circle(r, knob_x, cap_y, kSwitchH / 2 - 3, fade(kWhite, appear));
+  const auto draw_toggle = [&](const char* label, f32 y, bool enabled) {
+    y += lift;
+    draw_text(r, app.bold, label, p.x + 32, centered_baseline(app.bold, 17, y),
+              17, fade(kWhite, appear));
+    constexpr f32 kSwitchW = 46, kSwitchH = 26;
+    const f32     switch_x = p.x + p.w - 32 - kSwitchW;
+    draw_rounded_rect(
+        r, switch_x, y - kSwitchH / 2, kSwitchW, kSwitchH, kSwitchH / 2,
+        fade(enabled ? hex_color(0x8844CC) : hex_color(0x3A3A55), appear));
+    const f32 knob_x =
+        enabled ? switch_x + kSwitchW - kSwitchH / 2 : switch_x + kSwitchH / 2;
+    draw_circle(r, knob_x, y, kSwitchH / 2 - 3, fade(kWhite, appear));
+  };
+  draw_toggle("Cap frames at 1000 fps", p.cap_y, app.frame_cap);
+  draw_toggle("VSync", p.vsync_y, app.vsync);
 
   draw_text(r, app.regular,
             "Up / Down choose   ·   Left / Right change   ·   Esc closes",

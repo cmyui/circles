@@ -1,6 +1,6 @@
 # circles
 
-An osu!-style rhythm game in C++20 and OpenGL that plays real osu!standard
+An osu!-style rhythm game in C++20 and Metal that plays real osu!standard
 beatmaps, parsed with
 [fosu](https://github.com/cmyui/fast-osu-beatmap-parser).
 
@@ -12,17 +12,19 @@ the same judgements.
 
 ## Build and run
 
-macOS only: rendering uses Apple's OpenGL 4.1 headers. Needs CMake, GLFW and
+macOS 15 or later: rendering uses Metal and CAMetalLayer. Needs CMake, GLFW and
 xz, for replays' LZMA compression (`brew install cmake glfw xz`).
 
 ```sh
 make run     # build into build/ and start the game
 make test    # rule, archive, skin and replay tests
+make test-metal # graphics checks with Metal API and shader validation
 make format  # clang-format the sources
 ```
 
-The game reads `shaders/`, `beatmaps/`, `skins/` and `replays/` from the
-working directory, so run it from this folder.
+The build embeds the Metal shader source in the executable; the renderer
+compiles it once during initialization. The game reads `beatmaps/`, `skins/` and
+`replays/` from the working directory, so run it from this folder.
 
 ## Beatmaps
 
@@ -87,10 +89,69 @@ with them. Hidden and Flashlight make S and SS grades silver.
 | F9 | Next skin (outside gameplay) |
 | F10 | Mouse buttons on or off for hitting, saved in `settings.txt` |
 | F11 | Fullscreen |
+| Ctrl+O | Settings (outside gameplay): background dim, 1000 fps cap and VSync. Changes apply immediately and are saved in `settings.txt` |
 | F1 | Mod select (song select) |
 
 In song select, type to search, use the arrow keys to choose, Enter to play
 and F2 for a random song.
+
+## Rendering and profiling
+
+Game updates, input, GPU encoding and presentation submission run on the main
+thread. A worker obtains one drawable ahead of rendering, because the window
+server can block drawable acquisition even with VSync off. Until a drawable is
+available, game updates continue without building an image. Each rendered image
+uses the latest game state and is submitted directly to the display layer.
+There is no offscreen-frame mailbox or extra fullscreen presentation copy.
+
+VSync synchronizes presentation to the display refresh rate. Enable it in
+Settings for steadier pacing; it is independent of the 1000 fps cap.
+`--vsync` enables it for a launch, overriding the saved preference.
+
+Upload buffers use three frame slots and are recycled only after GPU completion.
+Command buffers retain the textures and buffers they reference. Snaking sliders
+use individual scratch targets so batching preserves painter order.
+
+The corner FPS counter counts submitted render frames, not updates or confirmed
+display refreshes. F8 records update-loop phases, passive GPU command-buffer
+timestamps and a `rendered` flag per update. `swap` is the CPU time encoding and
+submitting the final pass; it does not include the worker's drawable wait or
+measure when pixels reach the display. With the frame cap off, an update that
+could not render waits for an input/drawable event for up to 1 ms on its next
+poll, avoiding an idle spin. Input and drawable availability wake that wait.
+
+```sh
+python3 tools/perf_summary.py perf/<stamp>-frames.csv
+```
+
+## Replay benchmarks
+
+Build Release and run a replay with automatic intro skipping:
+
+```sh
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build -j8
+./build/circles --benchmark replays/example.osr --uncapped --skip-intro --benchmark-seconds 22
+```
+
+`--benchmark-seconds` limits time from process startup and saves the profile
+before exiting. `--skip-intro` uses a fixed landing time at the normal skip
+boundary. Controls remain available; Space skips manually, the arrow keys
+seek, and Esc pauses. Benchmarks continue when their window loses focus.
+Avoid interacting during a measured comparison.
+
+Run the CPU checks with `make test`. The separate graphics checks require a
+logged-in macOS graphics session:
+
+```sh
+cmake --build build --target check-metal
+```
+
+Compare submitted render rate, update rate, render intervals and GPU time
+separately. Keep the replay, skin, window size and presentation settings
+identical, discard startup/warm-up, and exclude runs whose controls were used.
+The benchmark deadline includes startup; an external process timeout can also
+bound startup, shutdown and driver stalls.
 
 ## Limitations
 

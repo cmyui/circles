@@ -17,7 +17,6 @@
 #include <circles/math.h>
 #include <circles/types.h>
 
-#include <OpenGL/gl3.h>
 #include <array>
 #include <cstddef>
 #include <fosu/slider_path.h>
@@ -108,11 +107,9 @@ struct PieceInstance {
 
 // A colour target with a 16-bit depth buffer, as stable draws bodies into.
 struct BodyTarget {
-  GLuint framebuffer = 0;
-  GLuint colour = 0;
-  GLuint depth = 0;
-  i32    width = 0;
-  i32    height = 0;
+  u32 colour = 0;
+  i32 width = 0;
+  i32 height = 0;
 };
 
 // What a visible slider's body texture holds.
@@ -120,6 +117,8 @@ struct BodyCache {
   size_t           object = 0;
   bool             used = false;  // drawn this frame
   BodyTarget       target;
+  // The changing tip, separate from the settled cache and other bodies.
+  BodyTarget       scratch;
   i32              x = 0, y = 0;  // the target's place in the framebuffer
   size_t           settled = 0;   // pieces drawn into it
   bool             squashable = false;
@@ -128,7 +127,7 @@ struct BodyCache {
   f32              radius = 0;
   i32              screen_width = 0, screen_height = 0;  // pixels
   BodySquash       squash{};
-  GLuint           gradient = 0;
+  u32              gradient = 0;
 };
 
 // The bodies of a play's visible sliders. release_slider_bodies frees them.
@@ -137,20 +136,10 @@ struct SliderBodies {
 };
 
 struct SliderBodyRenderer {
-  GLuint                                             program = 0;
-  GLuint                                             vao = 0;
-  GLuint                                             instances = 0;
-  GLint                                              radius = -1;
-  GLint                                              region = -1;
-  GLint                                              squash = -1;
   // Gradients across the body, by colour, border and antialiasing width.
-  std::vector<std::pair<std::array<u8, 12>, GLuint>> gradients;
-  // Where a snaking body is finished, one body at a time.
-  BodyTarget                                         scratch;
-  std::vector<PieceInstance>                         batch;
+  std::vector<std::pair<std::array<u8, 12>, u32>> gradients;
+  std::vector<PieceInstance>                      batch;
 };
-
-SliderBodyRenderer create_slider_body_renderer();
 
 // Draws object `index`'s body in its combo `colour` with `snake` of it
 // showing (stable's snaking progress), over the playfield whose origin is
