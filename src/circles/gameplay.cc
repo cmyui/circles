@@ -194,24 +194,6 @@ void recover(App& app) {
   game.phase_changed = app.now;
 }
 
-void skip_intro(App& app) {
-  auto& game = app.game;
-  if (!can_skip(game))
-    return;
-  // Stable lands a little either side of the boundary, at random.
-  static std::mt19937 engine{std::random_device{}()};
-  const i32           target =
-      *game.skip_boundary + std::uniform_int_distribution<i32>(-80, 89)(engine);
-  game.clock_time = target + song_offset(app);
-  if (game.audio_ok && game.clock_time >= 0) {
-    music_seek(app.audio, game.clock_time);
-    music_play(app.audio);
-    game.audio_started = true;
-  }
-  game.skip_boundary.reset();
-  play_sound(app.audio, Sound::MenuClick, 0.6f);
-}
-
 // ---- Input and replays ----
 
 // Each hit key's bits in a replay frame. osu! marks a keyboard key with a
@@ -1905,6 +1887,25 @@ void seek(App& app, f64 target) {
 
 }  // namespace
 
+void gameplay_skip_intro(App& app, bool randomize) {
+  auto& game = app.game;
+  if (!can_skip(game))
+    return;
+  // Stable lands a little either side of the boundary, at random.
+  static std::mt19937 engine{std::random_device{}()};
+  const i32           target =
+      *game.skip_boundary +
+      (randomize ? std::uniform_int_distribution<i32>(-80, 89)(engine) : 0);
+  game.clock_time = target + song_offset(app);
+  if (game.audio_ok && game.clock_time >= 0) {
+    music_seek(app.audio, game.clock_time);
+    music_play(app.audio);
+    game.audio_started = true;
+  }
+  game.skip_boundary.reset();
+  play_sound(app.audio, Sound::MenuClick, 0.6f);
+}
+
 bool gameplay_start(App& app, i32 map_index, std::string replay_path) {
   if (!load_gameplay(app, map_index, std::move(replay_path), true))
     return false;
@@ -2171,7 +2172,7 @@ void gameplay_key(App& app, i32 key, i32 action, f64 wall) {
         finish(app);
       break;
     case GLFW_KEY_SPACE:
-      skip_intro(app);
+      gameplay_skip_intro(app);
       break;
     case GLFW_KEY_GRAVE_ACCENT:  // quick retry, though not for Cinema
       if (!(game.mods & kCinema))
