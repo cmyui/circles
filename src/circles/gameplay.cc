@@ -2149,9 +2149,12 @@ void gameplay_key(App& app, i32 key, i32 action, f64 wall) {
       play_sound(app.audio, Sound::MenuHover, 0.5f);
     } else if (key == GLFW_KEY_ENTER || key == GLFW_KEY_KP_ENTER) {
       activate_menu_item(app, game.menu_selection);
-    } else if (key == GLFW_KEY_ESCAPE && action == GLFW_PRESS &&
-               game.phase == GamePhase::Paused) {
-      resume(app);
+    } else if (key == GLFW_KEY_ESCAPE && action == GLFW_PRESS) {
+      // Escape resumes a pause, and leaves a failed map as Quit does.
+      if (game.phase == GamePhase::Paused)
+        resume(app);
+      else if (game.phase == GamePhase::Failed)
+        activate_menu_item(app, count - 1);
     }
     return;
   }
