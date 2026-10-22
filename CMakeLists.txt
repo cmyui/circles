@@ -35,6 +35,7 @@ add_library(circles_core STATIC
   src/circles/audio.cc
   src/circles/gameplay.cc
   src/circles/gfx.cc
+  src/circles/gl_upload.cc
   src/circles/health.cc
   src/circles/hit_objects.cc
   src/circles/judging.cc
@@ -80,4 +81,16 @@ if(BUILD_TESTING)
     add_test(NAME ${name} COMMAND test_${name})
   endforeach()
   add_custom_target(check COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure -C $<CONFIG> DEPENDS ${_test_targets} USES_TERMINAL)
+endif()
+
+# OpenGL output equivalence and upload lifetime checks need a graphics session.
+if(BUILD_TESTING)
+  add_executable(test_gl_render EXCLUDE_FROM_ALL tests/test_gl_render.cc)
+  target_include_directories(test_gl_render PRIVATE ${PROJECT_SOURCE_DIR})
+  target_compile_options(test_gl_render PRIVATE -Wall -Wextra -UNDEBUG)
+  target_link_libraries(test_gl_render PRIVATE circles_core)
+  add_custom_target(check-gl
+    COMMAND $<TARGET_FILE:test_gl_render>
+    WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
+    DEPENDS test_gl_render USES_TERMINAL)
 endif()

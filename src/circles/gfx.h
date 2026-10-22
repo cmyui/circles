@@ -3,6 +3,7 @@
 // 2D drawing in window points (origin top-left, y down): shapes, images and
 // signed-distance-field text, batched into as few draw calls as possible.
 
+#include <circles/gl_upload.h>
 #include <circles/types.h>
 
 #include <OpenGL/gl3.h>
@@ -114,6 +115,10 @@ inline f32 centered_baseline(const Font& font, f32 size, f32 center_y) {
 enum class Align : u8 { Left, Center, Right };
 
 struct Renderer {
+  // Independent, opt-in switches for the OpenGL ablation benchmark.
+  bool                  batch_sliders = false;
+  bool                  reuse_uploads = false;
+  UploadArena           uploads;
   GLuint                program;
   GLuint                vao;
   GLuint                vbo;
@@ -132,6 +137,7 @@ struct Renderer {
 
 Renderer create_renderer();
 void begin_frame(Renderer& r, f32 width, f32 height);
+void end_frame(Renderer& r);
 // Draws the batch. Needed before drawing with any other program.
 void flush(Renderer& r);
 

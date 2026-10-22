@@ -1,5 +1,6 @@
 #include <circles/gfx.h>
 
+#include <OpenGL/gl3.h>
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -384,12 +385,19 @@ Renderer create_renderer() {
 }
 
 void begin_frame(Renderer& r, f32 width, f32 height) {
+  if (r.reuse_uploads)
+    begin_upload_frame(r.uploads);
   r.width = width;
   r.height = height;
   r.vertices.clear();
   r.texture_count = 0;
   r.draw_calls = 0;
   r.vertices_drawn = 0;
+}
+
+void end_frame(Renderer& r) {
+  if (r.reuse_uploads)
+    end_upload_frame(r.uploads);
 }
 
 void flush(Renderer& r) {
@@ -404,9 +412,23 @@ void flush(Renderer& r) {
   }
   glActiveTexture(GL_TEXTURE0);
   glBindVertexArray(r.vao);
-  glBindBuffer(GL_ARRAY_BUFFER, r.vbo);
-  glBufferData(GL_ARRAY_BUFFER, r.vertices.size() * sizeof(f32),
-               r.vertices.data(), GL_STREAM_DRAW);
+  if (r.reuse_uploads) {
+    const size_t      offset = upload_vertices(r.uploads, r.vertices.data(),
+                                               r.vertices.size() * sizeof(f32));
+    constexpr GLsizei stride = kFloatsPerVertex * sizeof(f32);
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, stride,
+                          reinterpret_cast<void*>(offset));
+    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, stride,
+                          reinterpret_cast<void*>(offset + 2 * sizeof(f32)));
+    glVertexAttribPointer(2, 4, GL_FLOAT, GL_FALSE, stride,
+                          reinterpret_cast<void*>(offset + 4 * sizeof(f32)));
+    glVertexAttribPointer(3, 4, GL_FLOAT, GL_FALSE, stride,
+                          reinterpret_cast<void*>(offset + 8 * sizeof(f32)));
+  } else {
+    glBindBuffer(GL_ARRAY_BUFFER, r.vbo);
+    glBufferData(GL_ARRAY_BUFFER, r.vertices.size() * sizeof(f32),
+                 r.vertices.data(), GL_STREAM_DRAW);
+  }
   const auto count = static_cast<GLsizei>(r.vertices.size() / kFloatsPerVertex);
   glDrawArrays(GL_TRIANGLES, 0, count);
   ++r.draw_calls;

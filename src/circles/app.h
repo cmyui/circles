@@ -481,6 +481,8 @@ bool gameplay_start(App& app, i32 map, std::string replay_path = {});
 // Judges the replay at `replay_path` silently, start to end, without touching
 // the music. False if it couldn't be loaded or the replay failed.
 bool judge_replay(App& app, i32 map, std::string replay_path);
+// Skip the lead-in; benchmarks disable the normal random landing offset.
+void gameplay_skip_intro(App& app, bool randomize = true);
 void gameplay_update(App& app);
 void gameplay_draw(App& app);
 // `wall` is when the input arrived, for timing the hit.
