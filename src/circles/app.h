@@ -330,6 +330,10 @@ struct App {
   // Frames sleep to run at most 1000 per second, rather than as fast as
   // they can.
   bool                     frame_cap = true;
+  // The cursor's size, a multiple of the skin's, 0.1 to 2 as in osu!.
+  f32                      cursor_size = 1;
+  // Whether a map's own combo colours replace the skin's.
+  bool                     beatmap_colours = true;
   struct SettingsMenu {
     bool open = false;
     f64  changed = -1e9;  // wall seconds
