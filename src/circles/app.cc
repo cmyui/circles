@@ -43,6 +43,8 @@ struct Settings {
   Mods        mods = 0;
   f32         background_dim = 0.8f;
   bool        frame_cap = true;
+  f32         cursor_size = 1;
+  bool        beatmap_colours = true;
 };
 
 Settings load_settings() {
@@ -70,6 +72,11 @@ Settings load_settings() {
     else if (key == "background_dim")
       settings.background_dim =
           std::clamp(static_cast<f32>(std::strtod(value, nullptr)), 0.0f, 1.0f);
+    else if (key == "cursor_size")
+      settings.cursor_size =
+          std::clamp(static_cast<f32>(std::strtod(value, nullptr)), 0.1f, 2.0f);
+    else if (key == "beatmap_colours")
+      settings.beatmap_colours = std::strtol(value, nullptr, 10) != 0;
   }
   return settings;
 }
@@ -217,7 +224,9 @@ void draw_skin_cursor(App&                          app,
                       bool                          pressed) {
   auto&       r = app.renderer;
   const auto& config = app.skin.config;
-  const f32   scale = ui_scale(app);
+  // The cursor size setting scales the cursor, its middle and its trail, as
+  // in osu!.
+  const f32   scale = ui_scale(app) * app.cursor_size;
   if (const auto* trail_image = skin_element(app.skin, "cursortrail")) {
     for (const auto& point : trail) {
       const f32 age = static_cast<f32>((app.now - point.time) / kTrailLength);
@@ -257,7 +266,7 @@ void draw_cursor(App& app) {
     draw_skin_cursor(app, cursor->front(), position, trail, pressed);
     return;
   }
-  const f32   size = app.height * 0.022f * (pressed ? 1.2f : 1);
+  const f32 size = app.height * 0.022f * app.cursor_size * (pressed ? 1.2f : 1);
   const Color warm = hex_color(0xFFC860);
   for (const auto& point : trail) {
     const f32 age = static_cast<f32>((app.now - point.time) / kTrailLength);
@@ -501,6 +510,8 @@ bool app_init(App& app) {
   app.mods = settings.mods;
   app.background_dim = settings.background_dim;
   app.frame_cap = settings.frame_cap;
+  app.cursor_size = settings.cursor_size;
+  app.beatmap_colours = settings.beatmap_colours;
   set_master_volume(app.audio, settings.volume);
   const i32 imported =
       static_cast<i32>(import_archives(kBeatmapDirectory, ".osz").size());
@@ -867,6 +878,8 @@ void save_settings(const App& app) {
   file << "mods=" << app.mods << '\n';
   file << "background_dim=" << app.background_dim << '\n';
   file << "frame_cap=" << app.frame_cap << '\n';
+  file << "cursor_size=" << app.cursor_size << '\n';
+  file << "beatmap_colours=" << app.beatmap_colours << '\n';
 }
 
 std::string save_replay(App& app, i32 map, Replay replay) {

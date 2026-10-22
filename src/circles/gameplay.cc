@@ -1745,9 +1745,10 @@ bool load_gameplay(App&        app,
   game.windows = hit_windows(difficulty.od);
   game.hp_setting = difficulty.hp;
   game.timing = sorted_timing_points(map);
-  // A map's own colours win over the skin's.
-  for (u32 rgb : map.combo_colours)
-    game.combo_colours.push_back(hex_color(rgb));
+  // A map's own colours win over the skin's, unless turned off in settings.
+  if (app.beatmap_colours)
+    for (u32 rgb : map.combo_colours)
+      game.combo_colours.push_back(hex_color(rgb));
   if (game.combo_colours.empty())
     game.combo_colours = app.skin.config.combo_colours;
   if (game.combo_colours.empty())
