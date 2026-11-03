@@ -62,13 +62,15 @@ const Vec2 kPlayfieldCentre{kPlayfieldWidth / 2, kPlayfieldHeight / 2};
 
 // Stable's offset, whole ms of song time between the music and the game:
 // 24 for maps before v5, a ms back under Half Time, and the global offset
-// scaled by the speed.
+// scaled by the speed. The output device's delay counts as more global
+// offset: the music is heard that long after it's played.
 i32 song_offset(const App& app) {
   const auto& game = app.game;
   i32         offset = game.map->format_version < 5 ? 24 : 0;
   if (game.rate < 1)
     offset -= static_cast<i32>((100 - game.rate * 100) / 75.0f * 5);
-  return offset + static_cast<i32>(game.rate * app.audio_offset);
+  return offset + static_cast<i32>(game.rate * (app.audio_offset +
+                                                app.audio.output_latency));
 }
 
 // Stable's audio clock: it runs on frame time while the music plays, easing

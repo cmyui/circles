@@ -1,5 +1,6 @@
 #include <circles/audio.h>
 
+#include <CoreAudio/CoreAudio.h>
 #include <algorithm>
 #include <cmath>
 #include <complex>
@@ -28,6 +29,56 @@ void data_callback(ma_device* device,
     audio->scope[write % Audio::kScopeSize] =
         0.5f * (samples[2 * i] + samples[2 * i + 1]);
   audio->scope_write.store(write, std::memory_order_release);
+}
+
+// The output moved to another device, whose latency differs.
+void notification_callback(const ma_device_notification* notification) {
+  if (notification->type == ma_device_notification_type_rerouted)
+    static_cast<Audio*>(notification->pDevice->pUserData)
+        ->latency_stale.store(true, std::memory_order_relaxed);
+}
+
+// A Core Audio property of `object`, or 0 if it has none.
+UInt32 core_audio_property(AudioObjectID               object,
+                           AudioObjectPropertySelector selector,
+                           AudioObjectPropertyScope    scope) {
+  const AudioObjectPropertyAddress address{selector, scope,
+                                           kAudioObjectPropertyElementMain};
+  UInt32                           value = 0, size = sizeof(value);
+  if (AudioObjectGetPropertyData(object, &address, 0, nullptr, &size, &value) !=
+      noErr)
+    return 0;
+  return value;
+}
+
+// The default output's delay from being handed audio to playing it: the
+// device's latency and safety offset, its IO buffer, and its first output
+// stream's latency.
+f64 query_output_latency() {
+  constexpr AudioObjectPropertyScope kGlobal = kAudioObjectPropertyScopeGlobal;
+  constexpr AudioObjectPropertyScope kOutput = kAudioObjectPropertyScopeOutput;
+  const AudioDeviceID                device =
+      core_audio_property(kAudioObjectSystemObject,
+                          kAudioHardwarePropertyDefaultOutputDevice, kGlobal);
+  const AudioObjectPropertyAddress address{
+      kAudioDevicePropertyNominalSampleRate, kGlobal,
+      kAudioObjectPropertyElementMain};
+  Float64 rate = 0;
+  UInt32  size = sizeof(rate);
+  if (!device ||
+      AudioObjectGetPropertyData(device, &address, 0, nullptr, &size, &rate) !=
+          noErr ||
+      rate <= 0)
+    return 0;
+  const AudioStreamID stream =
+      core_audio_property(device, kAudioDevicePropertyStreams, kOutput);
+  const UInt32 frames =
+      core_audio_property(device, kAudioDevicePropertyLatency, kOutput) +
+      core_audio_property(device, kAudioDevicePropertySafetyOffset, kOutput) +
+      core_audio_property(device, kAudioDevicePropertyBufferFrameSize,
+                          kGlobal) +
+      core_audio_property(stream, kAudioStreamPropertyLatency, kGlobal);
+  return frames * 1000.0 / rate;
 }
 
 // The built-in sounds. Every sample set shares one set of hitsounds.
@@ -397,10 +448,12 @@ bool audio_init(Audio& audio) {
   device_config.playback.channels = 2;
   device_config.sampleRate = kSampleRate;
   device_config.dataCallback = data_callback;
+  device_config.notificationCallback = notification_callback;
   device_config.pUserData = &audio;
-  // Small buffers keep the delay between a hit and its sound short.
+  // Small buffers keep the delay between a hit and its sound short: 64
+  // frames is 1.3 ms.
   device_config.performanceProfile = ma_performance_profile_low_latency;
-  device_config.periodSizeInMilliseconds = 5;
+  device_config.periodSizeInFrames = 64;
   if (ma_device_init(nullptr, &device_config, &audio.device) != MA_SUCCESS) {
     fprintf(stderr, "audio: no output device\n");
     ma_engine_uninit(&audio.engine);
@@ -414,6 +467,11 @@ bool audio_init(Audio& audio) {
   if (ma_device_start(&audio.device) != MA_SUCCESS)
     fprintf(stderr, "audio: failed to start the output device\n");
   return true;
+}
+
+void update_output_latency(Audio& audio) {
+  if (audio.ready && audio.latency_stale.exchange(false))
+    audio.output_latency = query_output_latency();
 }
 
 void audio_shutdown(Audio& audio) {

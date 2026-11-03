@@ -105,6 +105,12 @@ struct Audio {
   f32       master_volume = 1;  // scales everything; the player's setting
   SoundBank sounds[static_cast<i32>(Sound::Count)];
 
+  // How long the output device takes to play what it's given, in ms, as Core
+  // Audio reports it: on built-in speakers, mostly their own processing.
+  // update_output_latency re-reads it after the output changes.
+  f64       output_latency = 0;
+  std::atomic<bool>    latency_stale{true};
+
   // A mono copy of the latest output for the visualizer, written by the audio
   // thread.
   static constexpr u32 kScopeSize = 2048;
@@ -114,6 +120,9 @@ struct Audio {
 
 bool audio_init(Audio& audio);
 void audio_shutdown(Audio& audio);
+// Re-reads output_latency when the output device has changed, such as when
+// headphones are plugged in. Call from the main thread.
+void update_output_latency(Audio& audio);
 
 // Replaces every effect: decoded from the file `find_file` returns for its
 // stem, or synthesized when that's an empty path or won't decode.

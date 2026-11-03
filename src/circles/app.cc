@@ -544,6 +544,7 @@ bool app_init(App& app) {
 void app_frame(App& app, f64 now) {
   app.dt = static_cast<f32>(std::clamp(now - app.now, 0.0, 0.1));
   app.now = now;
+  update_output_latency(app.audio);
   i32 width, height, pixels_wide, pixels_high;
   glfwGetWindowSize(app.window, &width, &height);
   glfwGetFramebufferSize(app.window, &pixels_wide, &pixels_high);
@@ -918,7 +919,9 @@ void change_audio_offset(App& app, f64 ms) {
   app.audio_offset += ms;
   save_settings(app);
   char text[64];
-  snprintf(text, sizeof(text), "Audio offset %+.0f ms", app.audio_offset);
+  snprintf(text, sizeof(text),
+           "Audio offset %+.0f ms, plus %.0f ms output delay", app.audio_offset,
+           app.audio.output_latency);
   show_toast(app, text);
 }
 
