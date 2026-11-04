@@ -22,7 +22,9 @@ make format  # clang-format the sources
 ```
 
 The game reads `shaders/`, `beatmaps/`, `skins/` and `replays/` from the
-working directory, so run it from this folder.
+working directory, so run it from this folder. It builds as an app bundle,
+`build/circles.app`, which marks it as a game: macOS turns on Game Mode while
+it's full screen (F11), giving it priority on the CPU and GPU.
 
 ## Beatmaps
 
