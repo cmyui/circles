@@ -201,22 +201,6 @@ void update_backdrop(App& app) {
     destroy_texture(backdrop.previous);
 }
 
-void toggle_fullscreen(App& app) {
-  if (app.fullscreen) {
-    glfwSetWindowMonitor(app.window, nullptr, app.windowed[0], app.windowed[1],
-                         app.windowed[2], app.windowed[3], 0);
-  } else {
-    glfwGetWindowPos(app.window, &app.windowed[0], &app.windowed[1]);
-    glfwGetWindowSize(app.window, &app.windowed[2], &app.windowed[3]);
-    GLFWmonitor*       monitor = glfwGetPrimaryMonitor();
-    const GLFWvidmode* mode = glfwGetVideoMode(monitor);
-    glfwSetWindowMonitor(app.window, monitor, 0, 0, mode->width, mode->height,
-                         mode->refreshRate);
-  }
-  glfwSwapInterval(app.vsync ? 1 : 0);
-  app.fullscreen = !app.fullscreen;
-}
-
 void draw_skin_cursor(App&                          app,
                       const SkinImage&              cursor,
                       Vec2                          position,
@@ -652,7 +636,9 @@ void app_key(App& app, i32 key, i32 action) {
     toggle_profiling(app);
     return;
   }
-  if (key == GLFW_KEY_F11 && action == GLFW_PRESS) {
+  // On release: macOS drops the release of a key held as the window changes
+  // to or from full screen, and GLFW then takes its next press for a repeat.
+  if (key == GLFW_KEY_F11 && action == GLFW_RELEASE) {
     toggle_fullscreen(app);
     return;
   }

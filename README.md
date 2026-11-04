@@ -88,7 +88,7 @@ with them. Hidden and Flashlight make S and SS grades silver.
 | Alt (Option) + scroll, or scroll on the main menu | Volume, saved in `settings.txt` |
 | F9 | Next skin (outside gameplay) |
 | F10 | Mouse buttons on or off for hitting, saved in `settings.txt` |
-| F11 | Fullscreen |
+| F11 | Full screen, as the window's green button enters it: the display keeps its resolution |
 | F1 | Mod select (song select) |
 
 In song select, type to search, use the arrow keys to choose, Enter to play
