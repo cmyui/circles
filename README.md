@@ -86,6 +86,7 @@ with them. Hidden and Flashlight make S and SS grades silver.
 | <code>`</code> | Retry immediately |
 | `-` and `=` (Shift for 25 ms steps) | Global audio offset by 5 ms, on the main menu or in gameplay; raise it when sound reaches you late, as with Bluetooth or delayed speakers. Saved in `settings.txt` |
 | Alt (Option) + scroll, or scroll on the main menu | Volume, saved in `settings.txt` |
+| F7 | Latency test (outside gameplay): a black screen that turns white while a key or mouse button is held. Film it with a slow-motion camera to time a press reaching the display |
 | F9 | Next skin (outside gameplay) |
 | F10 | Mouse buttons on or off for hitting, saved in `settings.txt` |
 | F11 | Full screen, as the window's green button enters it: the display keeps its resolution |

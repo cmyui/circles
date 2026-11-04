@@ -421,6 +421,25 @@ void import_dropped(App& app) {
     select_enter(app);
 }
 
+// The latency test's screen and nothing else, so it takes next to no time
+// to draw.
+void draw_latency_test(App& app) {
+  auto& r = app.renderer;
+  draw_rect(r, 0, 0, app.width, app.height,
+            app.latency_test_held > 0 ? kWhite : kBlack);
+  draw_text(r, app.regular,
+            "Latency test: hold a key or button to light the screen   ·   F7 "
+            "leaves",
+            12, app.height - 10, 13, fade(hex_color(0x808080), 0.8f));
+}
+
+void count_latency_test_input(App& app, i32 action) {
+  if (action == GLFW_PRESS)
+    ++app.latency_test_held;
+  else if (action == GLFW_RELEASE)
+    app.latency_test_held = std::max(app.latency_test_held - 1, 0);
+}
+
 void draw_overlays(App& app) {
   auto& r = app.renderer;
   if (app.settings_menu.open)
@@ -581,21 +600,25 @@ void app_frame(App& app, f64 now) {
   glClearColor(0, 0, 0, 1);
   glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
   begin_frame(app.renderer, app.width, app.height);
-  switch (app.screen) {
-    case Screen::MainMenu:
-      menu_draw(app);
-      break;
-    case Screen::SongSelect:
-      select_draw(app);
-      break;
-    case Screen::Gameplay:
-      gameplay_draw(app);
-      break;
-    case Screen::Results:
-      results_draw(app);
-      break;
+  if (app.latency_test) {
+    draw_latency_test(app);
+  } else {
+    switch (app.screen) {
+      case Screen::MainMenu:
+        menu_draw(app);
+        break;
+      case Screen::SongSelect:
+        select_draw(app);
+        break;
+      case Screen::Gameplay:
+        gameplay_draw(app);
+        break;
+      case Screen::Results:
+        results_draw(app);
+        break;
+    }
+    draw_overlays(app);
   }
-  draw_overlays(app);
   flush(app.renderer);
   profile_gpu_end(app.profiler);
   profile_phase(app.profiler, FramePhase::Draw);
@@ -630,6 +653,16 @@ void app_key(App& app, i32 key, i32 action) {
   }
   if (app.settings_menu.open) {
     settings_key(app, key, action);
+    return;
+  }
+  if (key == GLFW_KEY_F7 && action == GLFW_PRESS &&
+      app.screen != Screen::Gameplay) {
+    app.latency_test = !app.latency_test;
+    app.latency_test_held = 0;
+    return;
+  }
+  if (app.latency_test) {
+    count_latency_test_input(app, action);
     return;
   }
   if (key == GLFW_KEY_F8 && action == GLFW_PRESS) {
@@ -694,6 +727,10 @@ void app_char(App& app, u32 codepoint) {
 }
 
 void app_mouse_button(App& app, i32 button, i32 action) {
+  if (app.latency_test) {
+    count_latency_test_input(app, action);
+    return;
+  }
   if (app.settings_menu.open) {
     settings_click(app, button, action);
     return;
