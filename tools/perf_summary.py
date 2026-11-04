@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Summarizes a circles profile: where frame time goes, and input timing.
+"""Summarizes a circles profile: where the game loop's time goes, how long
+frames take to reach the display, and input timing.
 
 Usage: tools/perf_summary.py perf/<stamp>-frames.csv [--all-screens]
 
@@ -8,12 +9,13 @@ Profiles come from F8 in game (press again to save) or
 """
 
 import argparse
+import bisect
 import csv
 import statistics
 from collections import defaultdict
 from pathlib import Path
 
-PHASES = ["poll", "update", "draw", "swap", "sleep"]
+PHASES = ["poll", "update", "draw", "present", "sleep"]
 SCREENS = ["main menu", "song select", "gameplay", "results"]
 
 
@@ -50,28 +52,30 @@ def main():
         return
     span = (chosen[-1]["start_ms"] - chosen[0]["start_ms"]) / 1000
     totals = [sum(f[f"{p}_ms"] for p in PHASES) for f in chosen]
-    busy = [f["poll_ms"] + f["update_ms"] + f["draw_ms"] for f in chosen]
-    gpu = [f["gpu_ms"] for f in chosen if f["gpu_ms"] >= 0]
+    # Passes that drew a frame.
+    drawn = [f for f in chosen if f["draw_calls"] > 0]
+    gpu = [f["gpu_ms"] for f in drawn if f["gpu_ms"] >= 0]
+    shown = [f["shown_ms"] for f in drawn if f["shown_ms"] >= 0]
 
-    print(f"{args.frames_csv.name}: {len(chosen)} frames over {span:.1f} s, "
-          f"{len(chosen) / max(span, 1e-9):.0f} fps")
-    print("frame time")
+    print(f"{args.frames_csv.name}: {len(chosen)} passes over {span:.1f} s, "
+          f"{len(chosen) / max(span, 1e-9):.0f} updates/s, "
+          f"{len(drawn) / max(span, 1e-9):.0f} frames drawn/s")
+    print("game loop pass")
     print(row("total", totals))
     for phase in PHASES:
         values = [f[f"{phase}_ms"] for f in chosen]
         share = sum(values) / max(sum(totals), 1e-9)
         print(row(phase, values) + f"  ({share:5.1%})")
-    print(row("cpu busy", busy) + "  (poll + update + draw)")
-    print(row("gpu", gpu))
-    # Only sampled frames are GPU-timed.
-    timed = [f for f in chosen if f["gpu_ms"] >= 0]
-    gpu_bound = sum(1 for f in timed if f["gpu_ms"] > f["poll_ms"] + f["update_ms"] + f["draw_ms"])
-    print(f"  gpu took longer than the cpu's work on "
-          f"{gpu_bound / max(len(timed), 1):.1%} of {len(timed)} timed frames")
-    print(f"  draw calls {statistics.fmean(f['draw_calls'] for f in chosen):.1f}, "
-          f"vertices {statistics.fmean(f['vertices'] for f in chosen):.0f} per frame")
+    if drawn:
+        print("drawn frames")
+        print(row("draw", [f["draw_ms"] for f in drawn]))
+        print(row("present", [f["present_ms"] for f in drawn]))
+        print(row("gpu", gpu))
+        print(row("drawing → shown", shown) + "  (full screen only)")
+        print(f"  draw calls {statistics.fmean(f['draw_calls'] for f in drawn):.1f}, "
+              f"vertices {statistics.fmean(f['vertices'] for f in drawn):.0f} per frame")
     slow = sorted(range(len(chosen)), key=lambda i: totals[i], reverse=True)[:5]
-    print("slowest frames: " + ", ".join(
+    print("slowest passes: " + ", ".join(
         f"#{int(chosen[i]['frame'])} {totals[i]:.2f} ms" for i in slow))
 
     input_csv = args.frames_csv.with_name(
@@ -97,9 +101,11 @@ def main():
               + (f", report interval p50 {pct(gaps, 0.5):.2f} ms "
                  f"(~{1000 / pct(gaps, 0.5):.0f} Hz)" if moves and gaps else ""))
         print("  " + row("event → seen", delays))
-    # A press counts at the update after the poll that saw it, and shows once
-    # that frame's swap returns.
-    to_update, to_swap = [], []
+    # A press counts at the update after the poll that saw it, and shows in
+    # the first frame drawn from then on: handed to the display once that
+    # pass presents, and on screen shown_ms after its drawing starts.
+    drawn_indices = sorted(int(f["frame"]) for f in drawn)
+    to_update, to_present, to_shown = [], [], []
     for i in inputs:
         if i["kind"] not in ("key_down", "button_down"):
             continue
@@ -107,14 +113,20 @@ def main():
         if not frame:
             continue
         event = float(i["event_ms"])
-        updated = frame["start_ms"] + frame["poll_ms"] + frame["update_ms"]
-        swapped = updated + frame["draw_ms"] + frame["swap_ms"]
-        to_update.append(updated - event)
-        to_swap.append(swapped - event)
+        to_update.append(frame["start_ms"] + frame["poll_ms"] + frame["update_ms"] - event)
+        at = bisect.bisect_left(drawn_indices, int(i["frame"]))
+        if at == len(drawn_indices):
+            continue
+        shows = by_index[drawn_indices[at]]
+        drawing = shows["start_ms"] + shows["poll_ms"] + shows["update_ms"]
+        to_present.append(drawing + shows["draw_ms"] + shows["present_ms"] - event)
+        if shows["shown_ms"] >= 0:
+            to_shown.append(drawing + shows["shown_ms"] - event)
     if to_update:
         print("presses")
         print(row("event → judged", to_update))
-        print(row("event → swapped", to_swap))
+        print(row("event → presented", to_present))
+        print(row("event → shown", to_shown) + "  (full screen only)")
 
 
 if __name__ == "__main__":

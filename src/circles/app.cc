@@ -297,9 +297,9 @@ void draw_profiler_overlay(App& app) {
                                                    {0.25f, 0.25f, 0.3f, 1}};
   std::array<f64, kFramePhases> sums{};
   f64                           gpu = 0;
-  i32                           count = 0, gpu_count = 0;
+  i32                           count = 0, gpu_count = 0, drawn = 0;
   u64                           draws = 0, vertices = 0;
-  std::vector<f32>              frame_ms;
+  std::vector<f32>              frame_ms, shown_ms;
   for (size_t i = frames.size(); i-- > 0 && now - frames[i].start < 1;) {
     f32 total = 0;
     for (i32 p = 0; p < kFramePhases; ++p) {
@@ -311,6 +311,9 @@ void draw_profiler_overlay(App& app) {
       gpu += frames[i].gpu_ms;
       ++gpu_count;
     }
+    if (frames[i].shown_ms >= 0)
+      shown_ms.push_back(frames[i].shown_ms);
+    drawn += frames[i].draw_calls > 0;
     draws += frames[i].draw_calls;
     vertices += frames[i].vertices;
     ++count;
@@ -329,15 +332,19 @@ void draw_profiler_overlay(App& app) {
   char      line[256];
   const f32 n = static_cast<f32>(std::max(count, 1));
   snprintf(line, sizeof(line),
-           "Profiling (F8 saves)   %d fps   frame p50 %.2f  p99 %.2f ms", count,
-           percentile(frame_ms, 0.5f), percentile(frame_ms, 0.99f));
+           "Profiling (F8 saves)   %d updates/s  %d drawn/s   loop p50 %.2f  "
+           "p99 %.2f ms",
+           count, drawn, percentile(frame_ms, 0.5f),
+           percentile(frame_ms, 0.99f));
   draw_text(r, app.regular, line, x + 10, y + 20, 12, kWhite);
   snprintf(line, sizeof(line),
-           "poll %.3f  update %.3f  draw %.3f  swap %.3f  sleep %.3f ms",
+           "poll %.3f  update %.3f  draw %.3f  present %.3f  sleep %.3f ms",
            sums[0] / n, sums[1] / n, sums[2] / n, sums[3] / n, sums[4] / n);
   draw_text(r, app.regular, line, x + 10, y + 40, 12, kWhite);
-  snprintf(line, sizeof(line), "gpu %.3f ms   %.0f draws   %.0f vertices",
-           gpu_count ? gpu / gpu_count : -1.0, draws / n, vertices / n);
+  snprintf(line, sizeof(line),
+           "gpu %.3f ms   %.0f draws   %.0f vertices   shown after %.2f ms",
+           gpu_count ? gpu / gpu_count : -1.0, draws / n, vertices / n,
+           shown_ms.empty() ? -1.0f : percentile(shown_ms, 0.5f));
   draw_text(r, app.regular, line, x + 10, y + 60, 12, kWhite);
   snprintf(
       line, sizeof(line),
@@ -363,7 +370,7 @@ void draw_profiler_overlay(App& app) {
                 graph_y + graph_h - std::min(f.gpu_ms * scale, graph_h), bar,
                 1.5f, kWhite);
   }
-  constexpr const char* kPhaseNames[] = {"poll", "update", "draw", "swap",
+  constexpr const char* kPhaseNames[] = {"poll", "update", "draw", "present",
                                          "sleep"};
   f32                   legend_x = x + 10;
   for (i32 p = 0; p < kFramePhases; ++p) {
@@ -440,8 +447,8 @@ void draw_overlays(App& app) {
               Align::Center);
   }
 
-  char fps[16];
-  snprintf(fps, sizeof(fps), "%d fps", app.fps);
+  char fps[48];
+  snprintf(fps, sizeof(fps), "%d fps   %d updates/s", app.fps, app.update_rate);
   draw_text_shadowed(r, app.regular, fps, app.width - 10, app.height - 8, 13,
                      fade(kWhite, 0.6f), Align::Right);
 
@@ -459,22 +466,14 @@ void draw_overlays(App& app) {
 bool app_init(App& app) {
   if (!glfwInit())
     return false;
-  // macOS supports OpenGL up to 4.1, only via a forward-compatible core
-  // profile.
-  glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
-  glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 1);
-  glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
-  glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
-  glfwWindowHint(GLFW_DEPTH_BITS, 24);
+  // GLFW makes the window but no graphics context: Metal draws into it.
+  glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
   app.window = glfwCreateWindow(1280, 720, "circles", nullptr, nullptr);
-  if (!app.window) {
+  if (!app.window || !gpu_init(app.window)) {
+    fprintf(stderr, "can't draw: no window or no Metal device\n");
     glfwTerminate();
     return false;
   }
-  glfwMakeContextCurrent(app.window);
-  // Hits are timed when a frame reads input, so frames don't wait for the
-  // display; main() caps their rate instead.
-  glfwSwapInterval(0);
   profiler_init(app.profiler);
   glfwSetInputMode(app.window, GLFW_CURSOR, GLFW_CURSOR_HIDDEN);
   glfwSetWindowSizeLimits(app.window, 800, 500, GLFW_DONT_CARE, GLFW_DONT_CARE);
@@ -484,8 +483,6 @@ bool app_init(App& app) {
   app.heavy = load_font(kFontPath, kFaceHeavy);
   app.bold = load_font(kFontPath, kFaceDemiBold);
   app.regular = load_font(kFontPath, kFaceMedium);
-  glEnable(GL_BLEND);
-  glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
   const bool     audio = audio_init(app.audio);
   const Settings settings = load_settings();
@@ -525,7 +522,7 @@ bool app_init(App& app) {
   return true;
 }
 
-void app_frame(App& app, f64 now) {
+void app_update(App& app, f64 now) {
   app.dt = static_cast<f32>(std::clamp(now - app.now, 0.0, 0.1));
   app.now = now;
   update_output_latency(app.audio);
@@ -537,11 +534,13 @@ void app_frame(App& app, f64 now) {
   app.pixel_width = pixels_wide;
   app.pixel_height = pixels_high;
 
-  ++app.fps_frames;
+  ++app.updates;
   if (now - app.fps_window_start >= 0.5) {
-    app.fps = static_cast<i32>(
-        std::lround(app.fps_frames / (now - app.fps_window_start)));
+    const f64 span = now - app.fps_window_start;
+    app.fps = static_cast<i32>(std::lround(app.fps_frames / span));
+    app.update_rate = static_cast<i32>(std::lround(app.updates / span));
     app.fps_frames = 0;
+    app.updates = 0;
     app.fps_window_start = now;
   }
   update_backdrop(app);
@@ -574,12 +573,12 @@ void app_frame(App& app, f64 now) {
       results_update(app);
       break;
   }
-  profile_phase(app.profiler, FramePhase::Update);
+}
 
-  profile_gpu_begin(app.profiler);
-  glViewport(0, 0, pixels_wide, pixels_high);
-  glClearColor(0, 0, 0, 1);
-  glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+bool app_draw(App& app) {
+  if (!gpu_begin_frame(app.pixel_width, app.pixel_height))
+    return false;
+  ++app.fps_frames;
   begin_frame(app.renderer, app.width, app.height);
   switch (app.screen) {
     case Screen::MainMenu:
@@ -597,8 +596,10 @@ void app_frame(App& app, f64 now) {
   }
   draw_overlays(app);
   flush(app.renderer);
-  profile_gpu_end(app.profiler);
   profile_phase(app.profiler, FramePhase::Draw);
+  gpu_end_frame(profile_frame_tag(app.profiler));
+  profile_phase(app.profiler, FramePhase::Present);
+  return true;
 }
 
 void app_shutdown(App& app) {
@@ -607,6 +608,7 @@ void app_shutdown(App& app) {
   release_slider_bodies(app.game.bodies);
   destroy_skin(app.skin);
   audio_shutdown(app.audio);
+  gpu_shutdown();
   glfwDestroyWindow(app.window);
   glfwTerminate();
 }

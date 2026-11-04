@@ -10,7 +10,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-# Rendering uses Apple's OpenGL 4.1 headers without a function loader.
+# Rendering uses Metal.
 if(NOT APPLE)
   message(FATAL_ERROR "circles currently supports macOS only")
 endif()
@@ -35,6 +35,7 @@ add_library(circles_core STATIC
   src/circles/audio.cc
   src/circles/gameplay.cc
   src/circles/gfx.cc
+  src/circles/gpu.mm
   src/circles/health.cc
   src/circles/hit_objects.cc
   src/circles/judging.cc
@@ -55,14 +56,15 @@ add_library(circles_core STATIC
   src/circles/window_macos.mm
 )
 target_include_directories(circles_core PUBLIC src)
-target_compile_definitions(circles_core PUBLIC GL_SILENCE_DEPRECATION)
+set_source_files_properties(src/circles/gpu.mm PROPERTIES
+  COMPILE_OPTIONS -fobjc-arc)
 target_compile_options(circles_core PRIVATE -Wall -Wextra)
 # osu!stable computes one floating-point operation at a time; fused
 # multiply-adds would change its judgements' arithmetic.
 target_compile_options(circles_core PUBLIC -ffp-contract=off)
 target_link_libraries(circles_core PUBLIC
-  circles_third_party PkgConfig::GLFW PkgConfig::LZMA "-framework OpenGL"
-  "-framework AppKit")
+  circles_third_party PkgConfig::GLFW PkgConfig::LZMA "-framework AppKit"
+  "-framework Metal" "-framework QuartzCore" "-framework IOSurface")
 
 # An app bundle, so macOS knows circles is a game: Game Mode turns on while
 # it's full screen.

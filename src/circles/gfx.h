@@ -3,9 +3,9 @@
 // 2D drawing in window points (origin top-left, y down): shapes, images and
 // signed-distance-field text, batched into as few draw calls as possible.
 
+#include <circles/gpu.h>
 #include <circles/types.h>
 
-#include <OpenGL/gl3.h>
 #include <array>
 #include <stb_truetype.h>
 #include <string>
@@ -41,12 +41,8 @@ inline Color shade(Color c, f32 k) {
 inline constexpr Color kWhite{1, 1, 1, 1};
 inline constexpr Color kBlack{0, 0, 0, 1};
 
-// Compiles and links a vertex + fragment shader pair. Exits with the log on
-// failure.
-GLuint load_program(const char* vertex_path, const char* fragment_path);
-
-// Decoded RGBA8 pixels. Loading is safe on any thread; uploading needs the GL
-// thread.
+// Decoded RGBA8 pixels. Loading is safe on any thread; uploading needs the
+// main thread.
 struct Image {
   std::vector<u8> pixels;
   i32             width = 0;
@@ -54,12 +50,12 @@ struct Image {
 };
 
 struct Texture {
-  GLuint id = 0;
-  i32    width = 0;
-  i32    height = 0;
+  GpuTexture* id = nullptr;
+  i32         width = 0;
+  i32         height = 0;
   // Fully transparent, so drawing it changes nothing. Skins ship such
   // placeholders, which can be large.
-  bool   blank = false;
+  bool        blank = false;
 };
 
 // Empty on failure. upload_texture marks a fully transparent image blank.
@@ -114,25 +110,20 @@ inline f32 centered_baseline(const Font& font, f32 size, f32 center_y) {
 enum class Align : u8 { Left, Center, Right };
 
 struct Renderer {
-  GLuint                program;
-  GLuint                vao;
-  GLuint                vbo;
-  GLint                 screen_size_location;
-  std::vector<f32>      vertices;
-  // The textures the batched vertices sample, by slot, each on its own unit.
-  std::array<GLuint, 8> textures{};
-  i32                   texture_count = 0;
-  GLuint                blank = 0;  // a white texel, for unused slots
-  f32                   width = 0;  // window size in points
-  f32                   height = 0;
+  std::vector<f32>                 vertices;
+  // The textures the batched vertices sample, by slot.
+  std::array<const GpuTexture*, 8> textures{};
+  i32                              texture_count = 0;
+  f32                              width = 0;  // window size in points
+  f32                              height = 0;
   // This frame's draws, for profiling.
-  u32                   draw_calls = 0;
-  u32                   vertices_drawn = 0;
+  u32                              draw_calls = 0;
+  u32                              vertices_drawn = 0;
 };
 
 Renderer create_renderer();
 void begin_frame(Renderer& r, f32 width, f32 height);
-// Draws the batch. Needed before drawing with any other program.
+// Sends the batch to be drawn.
 void flush(Renderer& r);
 
 void draw_rect(Renderer& r, f32 x, f32 y, f32 w, f32 h, Color color);

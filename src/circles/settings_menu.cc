@@ -1,8 +1,8 @@
 // The settings panel, opened with Ctrl+O as osu! opens its options, anywhere
 // but in a map: the gameplay background dim, where 100% hides the
 // background; the cursor's size, as osu!'s multiple of the skin's; whether
-// frames are capped at 1000 per second; and whether maps' own combo colours
-// replace the skin's.
+// the game loop is capped at 1000 updates per second; and whether maps' own
+// combo colours replace the skin's.
 #include <circles/app.h>
 
 #include <algorithm>
@@ -33,7 +33,7 @@ constexpr RowSpec kRows[kRowCount] = {
     {"Background dim", &App::background_dim, 0, 1},
     // osu!'s range.
     {"Cursor size", &App::cursor_size, 0.1f, 2},
-    {"Cap frames at 1000 fps", nullptr, 0, 1, &App::frame_cap},
+    {"Cap updates at 1000 per second", nullptr, 0, 1, &App::frame_cap},
     {"Beatmap combo colours", nullptr, 0, 1, &App::beatmap_colours},
 };
 
