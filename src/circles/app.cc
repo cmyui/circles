@@ -482,9 +482,11 @@ void time_driver(Readout& readout, f64 now) {
 
 // Takes the readout's samples. From the input monitor: how long presses and
 // cursor movements took to be read, and how often movements come. From the
-// GPU's reports, for frames shown (full screen): how long each took from
-// drawing to the display, and which presses and movements it was the first
-// to show. From the audio: how long sounds waited for their first cycle.
+// GPU's reports: for each frame drawn, how long input read before its
+// drawing started waited for it; for frames shown (full screen), how long
+// each took from drawing to the display, and which presses and movements it
+// was the first to show. From the audio: how long sounds waited for their
+// first cycle.
 // The GPU's reports go to the profiler too.
 void take_samples(App& app) {
   auto&     readout = app.readout;
@@ -495,6 +497,7 @@ void take_samples(App& app) {
     if (press.received - press.event_time <= kStall) {
       add_sample(readout.key_read, press.received - press.event_time);
       readout.presses.push_back(press);
+      readout.waiting_presses.push_back(press);
     }
   readout.new_moves.clear();
   take_input_moves(readout.new_moves);
@@ -508,6 +511,7 @@ void take_samples(App& app) {
       add_sample(readout.aim_interval, move.event_time - readout.last_move);
     readout.last_move = std::max(readout.last_move, move.event_time);
     readout.moves.push_back(move);
+    readout.waiting_moves.push_back(move);
     if (readout.pointer_access == PointerAccess::Listening)
       readout.driver_moves.push_back(move);
   }
@@ -517,17 +521,35 @@ void take_samples(App& app) {
   gpu_take_frame_times(readout.reports);
   profile_gpu_times(app.profiler, readout.reports);
   for (const GpuFrameTime& report : readout.reports) {
-    if (report.shown < 0)
+    if (report.shown < 0) {
+      // A frame drawn, windowed or full screen: input read before its drawing
+      // started waited for it. A moving cursor's wait is its newest
+      // movement's.
+      while (!readout.waiting_presses.empty() &&
+             readout.waiting_presses.front().received <= report.drawn) {
+        const f64 wait =
+            report.drawn - readout.waiting_presses.front().received;
+        if (wait <= kStall)
+          add_sample(readout.frame_wait, wait);
+        readout.waiting_presses.pop_front();
+      }
+      f64 read = -1;
+      while (!readout.waiting_moves.empty() &&
+             readout.waiting_moves.front().received <= report.drawn) {
+        read = readout.waiting_moves.front().received;
+        readout.waiting_moves.pop_front();
+      }
+      if (read >= 0 && report.drawn - read <= kStall)
+        add_sample(readout.aim_wait, report.drawn - read);
       continue;
+    }
     ++readout.shown;
     add_sample(readout.display, report.shown - report.drawn);
     while (!readout.presses.empty() &&
            readout.presses.front().received <= report.drawn) {
       const InputTiming& press = readout.presses.front();
-      if (report.drawn - press.received <= kStall) {
-        add_sample(readout.frame_wait, report.drawn - press.received);
+      if (report.drawn - press.received <= kStall)
         add_sample(readout.key_screen, report.shown - press.event_time);
-      }
       readout.presses.pop_front();
     }
     // The newest movement drawn into it, if the cursor was moving.
@@ -538,13 +560,12 @@ void take_samples(App& app) {
       read = readout.moves.front().received;
       readout.moves.pop_front();
     }
-    if (newest >= 0 && report.drawn - read <= kStall) {
-      add_sample(readout.aim_wait, report.drawn - read);
+    if (newest >= 0 && report.drawn - read <= kStall)
       add_sample(readout.aim_screen, report.shown - newest);
-    }
   }
-  // Windowed, no frame reports being shown.
-  for (auto* pending : {&readout.presses, &readout.moves})
+  // Windowed, no frame reports being shown; minimized, none drawn.
+  for (auto* pending : {&readout.presses, &readout.moves,
+                        &readout.waiting_presses, &readout.waiting_moves})
     while (!pending->empty() && now - pending->front().received > 1)
       pending->pop_front();
 
@@ -631,10 +652,10 @@ void draw_readout(App& app) {
     table = {
         {"", "driver", "read", "wait", "output", "total"},
         {"key to screen", "-", ms_text(readout.key_read.ms),
-         screen(readout.frame_wait.ms), screen(readout.display.ms),
+         ms_text(readout.frame_wait.ms), screen(readout.display.ms),
          with_ms(screen(readout.key_screen.ms))},
         {"aim to screen", ms_text(readout.driver.ms),
-         ms_text(readout.aim_read.ms), screen(readout.aim_wait.ms),
+         ms_text(readout.aim_read.ms), ms_text(readout.aim_wait.ms),
          screen(readout.display.ms), with_ms(screen(aim_screen))},
         {"key to sound", "-", ms_text(readout.key_read.ms),
          ms_text(readout.mixer.ms), ms_text(device),

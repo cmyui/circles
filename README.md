@@ -98,9 +98,10 @@ keyboard reports every 8.0 ms   aim every 0.99 ms
 
 Figures are medians of the last 30 samples, refreshed four times a second
 and shown to hundredths under 1 ms. A median of a whole path needn't equal
-its stages' medians added up. The screen's figures are full screen only
-(`-` windowed), and an input read over 100 ms late, as while a map loads,
-is left out.
+its stages' medians added up. The screen's output and totals are full
+screen only (`-` windowed: macOS doesn't tell an app when its window's
+frame reaches the display), and an input read over 100 ms late, as while a
+map loads, is left out.
 
 To measure further: F8 records a profile to `perf/` (F8 again saves it)
 for `tools/perf_summary.py`. In full screen the profile also times each

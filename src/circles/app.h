@@ -300,8 +300,9 @@ struct Readout {
   std::vector<InputTiming>  new_presses, new_moves;
   std::vector<GpuFrameTime> reports;
   std::vector<f64>          waits;
-  // Read, until a frame drawn after them is shown.
-  std::deque<InputTiming>   presses, moves;
+  // Read, until a frame drawn after them is shown, and until a frame starts
+  // drawing after them.
+  std::deque<InputTiming>   presses, moves, waiting_presses, waiting_moves;
   f64                       last_move = -1;  // event time
   // keys
   LatencyStat               key_read;
