@@ -39,8 +39,7 @@ the display depends on the window:
   display, one per refresh: each is drawn as soon as the display frees a
   buffer, and shows at the next refresh.
 
-To measure: F7 opens a latency test screen to film with a slow-motion camera,
-and F8 records a profile to `perf/` (F8 again saves it) for
+To measure: F8 records a profile to `perf/` (F8 again saves it) for
 `tools/perf_summary.py`. In full screen the profile also times each frame
 from the start of its drawing to the display showing it.
 
