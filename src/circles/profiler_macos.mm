@@ -3,14 +3,98 @@
 #include <circles/profiler.h>
 
 #import <AppKit/AppKit.h>
+#import <IOKit/hid/IOHIDKeys.h>
+#import <IOKit/hid/IOHIDLib.h>
+#import <IOKit/hidsystem/IOHIDLib.h>
+#import <IOKit/hid/IOHIDUsageTables.h>
+#include <mach/mach_time.h>
+
+#include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <mutex>
+#include <thread>
 
 namespace circles {
 
 namespace {
 
-f64                     last_event_time = -1;
-std::vector<InputPress> presses;
-NSEventModifierFlags    modifiers = 0;
+f64                      last_event_time = -1;
+std::vector<InputTiming> presses, moves;
+NSEventModifierFlags     modifiers = 0;
+
+// Pointing devices' raw reports, gathered on a thread of their own.
+struct PointerListener {
+  std::atomic<PointerAccess>        access{PointerAccess::Asked};
+  std::mutex                        mutex;
+  std::vector<f64>                  times;
+  std::vector<std::vector<uint8_t>> buffers;  // one per device
+  f64                               tick = 0;  // seconds per mach unit
+};
+PointerListener* pointers = nullptr;
+
+void on_pointer_report(void*,
+                       IOReturn,
+                       void*,
+                       IOHIDReportType,
+                       uint32_t,
+                       uint8_t*,
+                       CFIndex,
+                       uint64_t timestamp) {
+  std::lock_guard lock(pointers->mutex);
+  pointers->times.push_back(timestamp * pointers->tick);
+}
+
+// Waits for the permission, then reads reports for good. On a thread of its
+// own: each check of the permission keeps macOS busy for about 11 ms.
+void listen() {
+  for (bool asked = false;;) {
+    const IOHIDAccessType access =
+        IOHIDCheckAccess(kIOHIDRequestTypeListenEvent);
+    if (access == kIOHIDAccessTypeGranted)
+      break;
+    if (access == kIOHIDAccessTypeUnknown && !asked) {
+      IOHIDRequestAccess(kIOHIDRequestTypeListenEvent);  // macOS's prompt
+      asked = true;
+    }
+    pointers->access = access == kIOHIDAccessTypeDenied ? PointerAccess::Denied
+                                                        : PointerAccess::Asked;
+    std::this_thread::sleep_for(std::chrono::seconds(1));
+  }
+  @autoreleasepool {
+    IOHIDManagerRef manager = IOHIDManagerCreate(kCFAllocatorDefault, 0);
+    NSArray*        matching = @[
+      @{
+        @kIOHIDDeviceUsagePageKey : @(kHIDPage_GenericDesktop),
+        @kIOHIDDeviceUsageKey : @(kHIDUsage_GD_Mouse)
+      },
+      @{
+        @kIOHIDDeviceUsagePageKey : @(kHIDPage_GenericDesktop),
+        @kIOHIDDeviceUsageKey : @(kHIDUsage_GD_Pointer)
+      },
+      @{@kIOHIDDeviceUsagePageKey : @(kHIDPage_Digitizer)},
+    ];
+    IOHIDManagerSetDeviceMatchingMultiple(manager,
+                                          (__bridge CFArrayRef)matching);
+    IOHIDManagerScheduleWithRunLoop(manager, CFRunLoopGetCurrent(),
+                                    kCFRunLoopDefaultMode);
+    // Shared, so drivers such as OpenTabletDriver keep reading too.
+    IOHIDManagerOpen(manager, kIOHIDOptionsTypeNone);
+    NSSet* devices = CFBridgingRelease(IOHIDManagerCopyDevices(manager));
+    for (id device in devices) {
+      auto      ref = (__bridge IOHIDDeviceRef)device;
+      const i32 size = [(__bridge NSNumber*)IOHIDDeviceGetProperty(
+          ref, CFSTR(kIOHIDMaxInputReportSizeKey)) intValue];
+      if (size <= 0)
+        continue;
+      auto& buffer = pointers->buffers.emplace_back(size);
+      IOHIDDeviceRegisterInputReportWithTimeStampCallback(
+          ref, buffer.data(), size, on_pointer_report, nullptr);
+    }
+  }
+  pointers->access = PointerAccess::Listening;
+  CFRunLoopRun();
+}
 
 bool classify(NSEvent* event, InputKind& kind, InputDevice& device) {
   device = InputDevice::Mouse;
@@ -88,6 +172,9 @@ void install_input_monitor(Profiler& profiler) {
                                               kind == InputKind::ButtonDown)
                                             presses.push_back(
                                                 {event.timestamp, uptime()});
+                                          else if (kind == InputKind::Move)
+                                            moves.push_back(
+                                                {event.timestamp, uptime()});
                                           if (target->active &&
                                               target->in_frame) {
                                             target->inputs.push_back(
@@ -105,9 +192,62 @@ f64 last_input_event_time() {
   return last_event_time;
 }
 
-void take_input_presses(std::vector<InputPress>& out) {
+void take_input_presses(std::vector<InputTiming>& out) {
   out.insert(out.end(), presses.begin(), presses.end());
   presses.clear();
+}
+
+void take_input_moves(std::vector<InputTiming>& out) {
+  out.insert(out.end(), moves.begin(), moves.end());
+  moves.clear();
+}
+
+PointerAccess listen_to_pointers() {
+  if (!pointers) {
+    pointers = new PointerListener;
+    mach_timebase_info_data_t timebase;
+    mach_timebase_info(&timebase);
+    pointers->tick = static_cast<f64>(timebase.numer) / timebase.denom * 1e-9;
+    std::thread(listen).detach();
+  }
+  return pointers->access;
+}
+
+void take_pointer_reports(std::vector<f64>& times) {
+  if (!pointers)
+    return;
+  std::lock_guard lock(pointers->mutex);
+  times.insert(times.end(), pointers->times.begin(), pointers->times.end());
+  pointers->times.clear();
+}
+
+f64 keyboard_report_interval() {
+  @autoreleasepool {
+    f64           slowest = 0;
+    io_iterator_t  devices = 0;
+    if (IOServiceGetMatchingServices(kIOMainPortDefault,
+                                     IOServiceMatching("IOHIDDevice"),
+                                     &devices) != KERN_SUCCESS)
+      return slowest;
+    for (io_object_t device; (device = IOIteratorNext(devices));
+         IOObjectRelease(device)) {
+      const auto property = [&](const char* key) {
+        return CFBridgingRelease(IORegistryEntryCreateCFProperty(
+            device, (__bridge CFStringRef) @(key), kCFAllocatorDefault, 0));
+      };
+      bool keyboard = false;
+      for (NSDictionary* pair in property(kIOHIDDeviceUsagePairsKey))
+        keyboard |= [pair[@kIOHIDDeviceUsagePageKey] intValue] ==
+                        kHIDPage_GenericDesktop &&
+                    [pair[@kIOHIDDeviceUsageKey] intValue] ==
+                        kHIDUsage_GD_Keyboard;
+      const f64 interval = [property(kIOHIDReportIntervalKey) intValue] / 1000.0;
+      if (keyboard)
+        slowest = std::max(slowest, interval);
+    }
+    IOObjectRelease(devices);
+    return slowest;
+  }
 }
 
 void set_mouse_coalescing(bool enabled) {

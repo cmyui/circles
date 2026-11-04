@@ -111,6 +111,14 @@ struct Audio {
   f64       output_latency = 0;
   std::atomic<bool>    latency_stale{true};
 
+  // When recent audio cycles began mixing, in uptime seconds, written by
+  // the audio thread; and when sounds were started since sound_waits last
+  // took them.
+  static constexpr u32 kCycles = 64;
+  std::atomic<f64>     cycle_starts[kCycles] = {};
+  std::atomic<u32>     cycle_count{0};
+  std::vector<f64>     sound_starts;
+
   // A mono copy of the latest output for the visualizer, written by the audio
   // thread.
   static constexpr u32 kScopeSize = 2048;
@@ -123,9 +131,10 @@ void audio_shutdown(Audio& audio);
 // Re-reads output_latency when the output device has changed, such as when
 // headphones are plugged in. Call from the main thread.
 void update_output_latency(Audio& audio);
-// How often the output mixes a new buffer, in ms: a sound started waits up
-// to this long for its first.
-f64 audio_cycle_ms(const Audio& audio);
+// How long each sound started since the last call waited for the audio
+// cycle that first mixed it, in ms. Sounds whose cycle hasn't begun wait for
+// the next call.
+void sound_waits(Audio& audio, std::vector<f64>& waits);
 
 // Replaces every effect: decoded from the file `find_file` returns for its
 // stem, or synthesized when that's an empty path or won't decode.

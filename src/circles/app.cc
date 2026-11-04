@@ -3,6 +3,7 @@
 #include <circles/strings.h>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -45,6 +46,7 @@ struct Settings {
   bool        frame_cap = true;
   f32         cursor_size = 1;
   bool        beatmap_colours = true;
+  i32         readout = 1;  // Readout::mode
 };
 
 Settings load_settings() {
@@ -77,6 +79,9 @@ Settings load_settings() {
           std::clamp(static_cast<f32>(std::strtod(value, nullptr)), 0.1f, 2.0f);
     else if (key == "beatmap_colours")
       settings.beatmap_colours = std::strtol(value, nullptr, 10) != 0;
+    else if (key == "readout")
+      settings.readout =
+          std::clamp(static_cast<i32>(std::strtol(value, nullptr, 10)), 0, 2);
   }
   return settings;
 }
@@ -428,43 +433,280 @@ void import_dropped(App& app) {
     select_enter(app);
 }
 
-// How many recent frames, and presses, the readout's medians cover.
+// How many recent samples the readout's medians cover.
 constexpr size_t kReadoutSamples = 30;
-// A press read this long after it happened met a stalled game loop, as
-// while a map loads: it says nothing about the usual delay.
+// Input read this long after it happened, or a frame drawn this long after
+// it was read, met a stalled game loop, as while a map loads: it says
+// nothing about the usual delay.
 constexpr f64    kStall = 0.1;
 
-void add_sample(std::deque<f32>& samples, f64 seconds) {
-  samples.push_back(static_cast<f32>(seconds * 1000));
-  if (samples.size() > kReadoutSamples)
-    samples.pop_front();
+void add_sample(LatencyStat& stat, f64 seconds) {
+  stat.samples.push_back(static_cast<f32>(seconds * 1000));
+  if (stat.samples.size() > kReadoutSamples)
+    stat.samples.pop_front();
 }
 
-f32 median(const std::deque<f32>& samples) {
-  return samples.empty() ? -1
-                         : percentile({samples.begin(), samples.end()}, 0.5f);
+void refresh(LatencyStat& stat) {
+  if (!stat.samples.empty())
+    stat.ms = percentile({stat.samples.begin(), stat.samples.end()}, 0.5f);
 }
 
-// Takes the readout's samples: from the GPU's reports, how long each frame
-// shown took from its drawing to the display, and from the input monitor,
-// how long each press took to be read. The GPU's reports go to the
-// profiler too.
+// The driver's time on each cursor movement: from the newest pointing
+// device report before it to the movement's own timestamp. A mouse's
+// movement is stamped with its report's arrival, so it reads about 0; a
+// tablet driver such as OpenTabletDriver makes its own, later. Movements are
+// timed once 20 ms old, when every report before them has been taken.
+void time_driver(Readout& readout, f64 now) {
+  readout.new_reports.clear();
+  take_pointer_reports(readout.new_reports);
+  std::sort(readout.new_reports.begin(), readout.new_reports.end());
+  readout.pointer_reports.insert(readout.pointer_reports.end(),
+                                 readout.new_reports.begin(),
+                                 readout.new_reports.end());
+  auto& reports = readout.pointer_reports;
+  while (!readout.driver_moves.empty() &&
+         now - readout.driver_moves.front().received > 0.02) {
+    // Stamps of the same moment can differ by rounding.
+    const f64 stamped = readout.driver_moves.front().event_time + 0.0001;
+    readout.driver_moves.pop_front();
+    while (reports.size() > 1 && reports[1] <= stamped)
+      reports.pop_front();
+    if (!reports.empty() && reports.front() <= stamped &&
+        stamped - reports.front() < 0.05)
+      add_sample(readout.driver,
+                 std::max(0.0, stamped - 0.0001 - reports.front()));
+  }
+  while (reports.size() > 1 && now - reports.front() > 1)
+    reports.pop_front();
+}
+
+// Takes the readout's samples. From the input monitor: how long presses and
+// cursor movements took to be read, and how often movements come. From the
+// GPU's reports, for frames shown (full screen): how long each took from
+// drawing to the display, and which presses and movements it was the first
+// to show. From the audio: how long sounds waited for their first cycle.
+// The GPU's reports go to the profiler too.
 void take_samples(App& app) {
-  auto& readout = app.readout;
+  auto&     readout = app.readout;
+  const f64 now = uptime();
+  readout.new_presses.clear();
+  take_input_presses(readout.new_presses);
+  for (const InputTiming& press : readout.new_presses)
+    if (press.received - press.event_time <= kStall) {
+      add_sample(readout.key_read, press.received - press.event_time);
+      readout.presses.push_back(press);
+    }
+  readout.new_moves.clear();
+  take_input_moves(readout.new_moves);
+  for (const InputTiming& move : readout.new_moves) {
+    if (move.received - move.event_time > kStall)
+      continue;
+    add_sample(readout.aim_read, move.received - move.event_time);
+    // Between movements while the cursor keeps moving.
+    if (readout.last_move >= 0 && move.event_time > readout.last_move &&
+        move.event_time - readout.last_move < 0.05)
+      add_sample(readout.aim_interval, move.event_time - readout.last_move);
+    readout.last_move = std::max(readout.last_move, move.event_time);
+    readout.moves.push_back(move);
+    if (readout.pointer_access == PointerAccess::Listening)
+      readout.driver_moves.push_back(move);
+  }
+  time_driver(readout, now);
+
   readout.reports.clear();
   gpu_take_frame_times(readout.reports);
   profile_gpu_times(app.profiler, readout.reports);
-  for (const GpuFrameTime& report : readout.reports)
-    if (report.shown >= 0) {
-      ++readout.shown;
-      add_sample(readout.display, report.shown - report.drawn);
+  for (const GpuFrameTime& report : readout.reports) {
+    if (report.shown < 0)
+      continue;
+    ++readout.shown;
+    add_sample(readout.display, report.shown - report.drawn);
+    while (!readout.presses.empty() &&
+           readout.presses.front().received <= report.drawn) {
+      const InputTiming& press = readout.presses.front();
+      if (report.drawn - press.received <= kStall) {
+        add_sample(readout.frame_wait, report.drawn - press.received);
+        add_sample(readout.key_screen, report.shown - press.event_time);
+      }
+      readout.presses.pop_front();
     }
-  readout.presses.clear();
-  take_input_presses(readout.presses);
-  for (const InputPress& press : readout.presses) {
-    const f64 waited = press.received - press.event_time;
-    if (waited <= kStall)
-      add_sample(readout.input, waited);
+    // The newest movement drawn into it, if the cursor was moving.
+    f64 newest = -1, read = -1;
+    while (!readout.moves.empty() &&
+           readout.moves.front().received <= report.drawn) {
+      newest = readout.moves.front().event_time;
+      read = readout.moves.front().received;
+      readout.moves.pop_front();
+    }
+    if (newest >= 0 && report.drawn - read <= kStall) {
+      add_sample(readout.aim_wait, report.drawn - read);
+      add_sample(readout.aim_screen, report.shown - newest);
+    }
+  }
+  // Windowed, no frame reports being shown.
+  for (auto* pending : {&readout.presses, &readout.moves})
+    while (!pending->empty() && now - pending->front().received > 1)
+      pending->pop_front();
+
+  readout.waits.clear();
+  sound_waits(app.audio, readout.waits);
+  for (f64 wait : readout.waits)
+    add_sample(readout.mixer, wait / 1000);
+}
+
+// The readout's medians, refreshed with the frame rates.
+void refresh_readout(App& app, f64 span) {
+  auto& readout = app.readout;
+  readout.shown_rate = static_cast<i32>(std::lround(readout.shown / span));
+  readout.shown = 0;
+  // Listening needs a permission the stage panel asks for; it can be
+  // granted while the game runs.
+  if (readout.mode == 2 && readout.pointer_access != PointerAccess::Listening)
+    readout.pointer_access = listen_to_pointers();
+  for (LatencyStat* stat :
+       {&readout.key_read, &readout.driver, &readout.aim_interval,
+        &readout.aim_read, &readout.frame_wait, &readout.aim_wait,
+        &readout.display, &readout.mixer, &readout.key_screen,
+        &readout.aim_screen})
+    refresh(*stat);
+}
+
+// "12.3", or "-" when not known. Under 1 ms, to hundredths: the input stages
+// are that small, and the clocks resolve them.
+std::string ms_text(f32 ms) {
+  char text[16] = "-";
+  if (ms >= 0)
+    snprintf(text, sizeof(text), ms < 1 ? "%.2f" : "%.1f", ms);
+  return text;
+}
+
+// "12.3 ms", or "-" when not known.
+std::string with_ms(std::string text) {
+  return text == "-" ? text : text + " ms";
+}
+
+// Bottom right: rates and each path's total on a line, or (mode 2) a table
+// of each path's stages, on a dark backing. Words are dim, numbers bright.
+void draw_readout(App& app) {
+  const auto& readout = app.readout;
+  if (readout.mode == 0)
+    return;
+  // Full screen, frames shown; windowed, macOS doesn't report what the
+  // compositor shows, so frames drawn, and nothing about the screen.
+  const bool full = readout.shown_rate > 0;
+  const auto screen = [&](f32 ms) {
+    return ms_text(full ? ms : -1);
+  };
+  // A press's hitsound: read, then waiting for the mixer, then the output
+  // device's delay.
+  const f32 device =
+      app.audio.ready ? static_cast<f32>(app.audio.output_latency) : -1;
+  const f32 key_sound =
+      readout.key_read.ms >= 0 && readout.mixer.ms >= 0 && device >= 0
+          ? readout.key_read.ms + readout.mixer.ms + device
+          : -1;
+  // The aiming hand's whole path: the driver's time, when known, then the
+  // movement's from its timestamp to the frame showing it.
+  const f32 aim_screen =
+      readout.aim_screen.ms >= 0
+          ? readout.aim_screen.ms + std::max(readout.driver.ms, 0.0f)
+          : -1;
+
+  // Each line alternates words and numbers, starting with words.
+  using Line = std::vector<std::string>;
+  std::vector<Line>                       lines;
+  std::vector<std::array<std::string, 6>> table;
+  char                                    rate[16], updates[16];
+  snprintf(rate, sizeof(rate), "%d", full ? readout.shown_rate : app.fps);
+  snprintf(updates, sizeof(updates), "%d", app.update_rate);
+  Line rates = {"", rate, full ? " fps   " : " drawn/s   ", updates,
+                " updates/s"};
+  if (readout.mode == 1) {
+    rates.insert(rates.end(),
+                 {"   key to screen ", with_ms(screen(readout.key_screen.ms)),
+                  "   aim to screen ", with_ms(screen(aim_screen)),
+                  "   key to sound ", with_ms(ms_text(key_sound))});
+    lines.push_back(rates);
+  } else {
+    table = {
+        {"", "driver", "read", "wait", "output", "total"},
+        {"key to screen", "-", ms_text(readout.key_read.ms),
+         screen(readout.frame_wait.ms), screen(readout.display.ms),
+         with_ms(screen(readout.key_screen.ms))},
+        {"aim to screen", ms_text(readout.driver.ms),
+         ms_text(readout.aim_read.ms), screen(readout.aim_wait.ms),
+         screen(readout.display.ms), with_ms(screen(aim_screen))},
+        {"key to sound", "-", ms_text(readout.key_read.ms),
+         ms_text(readout.mixer.ms), ms_text(device),
+         with_ms(ms_text(key_sound))},
+    };
+    const f64 keyboard = readout.keyboard_interval_ms;
+    lines.push_back({"keyboard reports every ",
+                     with_ms(ms_text(keyboard > 0 ? keyboard : -1)),
+                     "   aim every ",
+                     with_ms(ms_text(readout.aim_interval.ms))});
+    if (readout.pointer_access == PointerAccess::Asked)
+      lines.push_back({"driver: allow Input Monitoring when macOS asks"});
+    else if (readout.pointer_access == PointerAccess::Denied)
+      lines.push_back({"driver: allow circles in Input Monitoring settings"});
+    lines.push_back(rates);
+  }
+
+  auto&         r = app.renderer;
+  const Font&   font = app.regular;
+  constexpr f32 kSize = 13, kRow = 18, kGap = 16, kMargin = 8;
+  const f32     pad = table.empty() ? 0 : 10;  // the backing's
+  const auto    width = [&](std::string_view text) {
+    return measure_text(font, text, kSize);
+  };
+  std::array<f32, 6> columns{};
+  for (const auto& row : table)
+    for (size_t c = 0; c < row.size(); ++c)
+      columns[c] = std::max(columns[c], width(row[c]));
+  f32 block = 0;
+  for (f32 column : columns)
+    block += column;
+  if (!table.empty())
+    block += kGap * (columns.size() - 1);
+  for (const Line& line : lines) {
+    f32 line_width = 0;
+    for (const std::string& piece : line)
+      line_width += width(piece);
+    block = std::max(block, line_width);
+  }
+  // Baselines: half a row between the table and the lines.
+  const f32 left = app.width - kMargin - pad - block;
+  const f32 last = app.height - kMargin - pad;
+  f32 y = last - kRow * static_cast<f32>(lines.size() - 1) -
+          (table.empty() ? 0 : kRow * (static_cast<f32>(table.size()) + 0.5f));
+  if (!table.empty()) {
+    const f32 top = y - font.cap_height * kSize - pad;
+    draw_rounded_rect(r, left - pad, top, block + 2 * pad,
+                      app.height - kMargin - top, 6, fade(kBlack, 0.55f));
+  }
+  const Color dim = fade(kWhite, 0.5f), bright = fade(kWhite, 0.85f);
+  for (size_t i = 0; i < table.size(); ++i, y += kRow) {
+    f32 x = left;
+    for (size_t c = 0; c < columns.size(); ++c) {
+      const std::string& text = table[i][c];
+      if (c == 0)
+        draw_text_shadowed(r, font, text, x, y, kSize, dim);
+      else
+        draw_text_shadowed(r, font, text, x + columns[c], y, kSize,
+                           i > 0 && text != "-" ? bright : dim, Align::Right);
+      x += columns[c] + kGap;
+    }
+  }
+  if (!table.empty())
+    y += kRow / 2;
+  for (const Line& line : lines) {
+    f32 x = left;
+    for (size_t k = 0; k < line.size(); ++k) {
+      draw_text_shadowed(r, font, line[k], x, y, kSize,
+                         k % 2 == 1 && line[k] != "-" ? bright : dim);
+      x += width(line[k]);
+    }
+    y += kRow;
   }
 }
 
@@ -487,24 +729,7 @@ void draw_overlays(App& app) {
               Align::Center);
   }
 
-  // Full screen, frames shown; windowed, macOS doesn't report what the
-  // compositor shows, so frames drawn, and no display time.
-  const auto& readout = app.readout;
-  const auto  ms = [](char (&text)[16], f32 value) {
-    if (value >= 0)
-      snprintf(text, sizeof(text), "%.1f ms", value);
-  };
-  char display[16] = "-", audio[16] = "-", input[16] = "-", line[128];
-  ms(display, readout.display_ms);
-  ms(audio, readout.audio_ms);
-  ms(input, readout.input_ms);
-  snprintf(line, sizeof(line),
-           "%d %s   %d updates/s   display %s   audio %s   input %s",
-           readout.shown_rate ? readout.shown_rate : app.fps,
-           readout.shown_rate ? "fps" : "drawn/s", app.update_rate, display,
-           audio, input);
-  draw_text_shadowed(r, app.regular, line, app.width - 10, app.height - 8, 13,
-                     fade(kWhite, 0.6f), Align::Right);
+  draw_readout(app);
 
   if (app.transition_started >= 0) {
     const f64 t = app.now - app.transition_started;
@@ -547,6 +772,8 @@ bool app_init(App& app) {
   app.frame_cap = settings.frame_cap;
   app.cursor_size = settings.cursor_size;
   app.beatmap_colours = settings.beatmap_colours;
+  app.readout.mode = settings.readout;
+  app.readout.keyboard_interval_ms = keyboard_report_interval();
   set_master_volume(app.audio, settings.volume);
   const i32 imported =
       static_cast<i32>(import_archives(kBeatmapDirectory, ".osz").size());
@@ -594,19 +821,9 @@ void app_update(App& app, f64 now) {
     const f64 span = now - app.fps_window_start;
     app.fps = static_cast<i32>(std::lround(app.fps_frames / span));
     app.update_rate = static_cast<i32>(std::lround(app.updates / span));
-    auto& readout = app.readout;
-    readout.shown_rate = static_cast<i32>(std::lround(readout.shown / span));
-    readout.display_ms = readout.shown_rate ? median(readout.display) : -1;
-    // A sound started waits for the audio's next cycle, half of one on
-    // average, then takes the output's delay to leave the speakers.
-    readout.audio_ms = app.audio.ready
-                           ? static_cast<f32>(audio_cycle_ms(app.audio) / 2 +
-                                              app.audio.output_latency)
-                           : -1;
-    readout.input_ms = median(readout.input);
+    refresh_readout(app, span);
     app.fps_frames = 0;
     app.updates = 0;
-    readout.shown = 0;
     app.fps_window_start = now;
   }
   update_backdrop(app);
@@ -702,6 +919,12 @@ void app_key(App& app, i32 key, i32 action) {
   }
   if (key == GLFW_KEY_F8 && action == GLFW_PRESS) {
     toggle_profiling(app);
+    return;
+  }
+  if (key == GLFW_KEY_F6 && action == GLFW_PRESS) {
+    // The readout: hidden, a line, then with its stages.
+    app.readout.mode = (app.readout.mode + 1) % 3;
+    save_settings(app);
     return;
   }
   // On release: macOS drops the release of a key held as the window changes
@@ -935,6 +1158,7 @@ void save_settings(const App& app) {
   file << "frame_cap=" << app.frame_cap << '\n';
   file << "cursor_size=" << app.cursor_size << '\n';
   file << "beatmap_colours=" << app.beatmap_colours << '\n';
+  file << "readout=" << app.readout.mode << '\n';
 }
 
 std::string save_replay(App& app, i32 map, Replay replay) {

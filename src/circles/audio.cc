@@ -21,7 +21,12 @@ void data_callback(ma_device* device,
                    void*      output,
                    const void* /*input*/,
                    ma_uint32 frame_count) {
-  auto* audio = static_cast<Audio*>(device->pUserData);
+  auto*     audio = static_cast<Audio*>(device->pUserData);
+  const u32 cycle = audio->cycle_count.load(std::memory_order_relaxed);
+  audio->cycle_starts[cycle % Audio::kCycles].store(
+      clock_gettime_nsec_np(CLOCK_UPTIME_RAW) * 1e-9,
+      std::memory_order_relaxed);
+  audio->cycle_count.store(cycle + 1, std::memory_order_release);
   ma_engine_read_pcm_frames(&audio->engine, output, frame_count, nullptr);
   const auto* samples = static_cast<const f32*>(output);
   u32         write = audio->scope_write.load(std::memory_order_relaxed);
@@ -469,12 +474,24 @@ bool audio_init(Audio& audio) {
   return true;
 }
 
-f64 audio_cycle_ms(const Audio& audio) {
-  const auto& playback = audio.device.playback;
-  return audio.ready && playback.internalSampleRate
-             ? 1000.0 * playback.internalPeriodSizeInFrames /
-                   playback.internalSampleRate
-             : 0;
+void sound_waits(Audio& audio, std::vector<f64>& waits) {
+  const u32 count = audio.cycle_count.load(std::memory_order_acquire);
+  std::erase_if(audio.sound_starts, [&](f64 start) {
+    // The first cycle to begin after it, among those still recorded.
+    f64 first = -1;
+    for (u32 i = count > Audio::kCycles ? count - Audio::kCycles : 0; i < count;
+         ++i) {
+      const f64 begun = audio.cycle_starts[i % Audio::kCycles].load(
+          std::memory_order_relaxed);
+      if (begun >= start && (first < 0 || begun < first))
+        first = begun;
+    }
+    if (first >= 0)
+      waits.push_back((first - start) * 1000);
+    // Too old to still be waiting: the cycle that mixed it was overwritten.
+    return first >= 0 ||
+           clock_gettime_nsec_np(CLOCK_UPTIME_RAW) * 1e-9 - start > 0.05;
+  });
 }
 
 void update_output_latency(Audio& audio) {
@@ -650,6 +667,7 @@ void play_sound(Audio& audio, Sound sound, f32 volume, f32 pan) {
   ma_sound_set_volume(&voice.sound, volume * audio.effects_volume);
   ma_sound_set_pan(&voice.sound, pan);
   ma_sound_start(&voice.sound);
+  audio.sound_starts.push_back(clock_gettime_nsec_np(CLOCK_UPTIME_RAW) * 1e-9);
 }
 
 void audio_spectrum(Audio& audio, f32* bands, i32 band_count) {
