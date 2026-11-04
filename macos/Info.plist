@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleExecutable</key>
+  <string>circles</string>
+  <key>CFBundleIdentifier</key>
+  <string>io.github.cmyui.circles</string>
+  <key>CFBundleName</key>
+  <string>circles</string>
+  <key>CFBundlePackageType</key>
+  <string>APPL</string>
+  <key>CFBundleInfoDictionaryVersion</key>
+  <string>6.0</string>
+  <key>CFBundleShortVersionString</key>
+  <string>0.1</string>
+  <key>CFBundleVersion</key>
+  <string>1</string>
+  <!-- A game category lets macOS turn on Game Mode while it's full screen. -->
+  <key>LSApplicationCategoryType</key>
+  <string>public.app-category.music-games</string>
+  <key>GCSupportsGameMode</key>
+  <true/>
+  <!-- Without this a bundled app renders at half resolution on Retina. -->
+  <key>NSHighResolutionCapable</key>
+  <true/>
+</dict>
+</plist>

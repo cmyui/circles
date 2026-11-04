@@ -63,7 +63,11 @@ target_link_libraries(circles_core PUBLIC
   circles_third_party PkgConfig::GLFW PkgConfig::LZMA "-framework OpenGL"
   "-framework AppKit")
 
-add_executable(circles src/circles/main.cc)
+# An app bundle, so macOS knows circles is a game: Game Mode turns on while
+# it's full screen.
+add_executable(circles MACOSX_BUNDLE src/circles/main.cc)
+set_target_properties(circles PROPERTIES
+  MACOSX_BUNDLE_INFO_PLIST ${PROJECT_SOURCE_DIR}/macos/Info.plist)
 target_compile_options(circles PRIVATE -Wall -Wextra)
 target_link_libraries(circles PRIVATE circles_core)
 
