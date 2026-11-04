@@ -334,6 +334,10 @@ struct App {
   f32                      cursor_size = 1;
   // Whether a map's own combo colours replace the skin's.
   bool                     beatmap_colours = true;
+  // The latency test (F7): a black window that turns white while any key or
+  // mouse button is held, to film how long a press takes to show.
+  bool                     latency_test = false;
+  i32                      latency_test_held = 0;  // keys and buttons down
   struct SettingsMenu {
     bool open = false;
     f64  changed = -1e9;  // wall seconds
