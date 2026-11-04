@@ -242,7 +242,7 @@ void wait_for_drawables() {
 }
 
 // Follows the window in and out of full screen. Full screen, the Metal
-// layer matches the view's pixels.
+// layer matches the view's pixels and the screen's colour space.
 void follow_full_screen() {
   const bool full = (g->window.styleMask & NSWindowStyleMaskFullScreen) != 0;
   if (full) {
@@ -252,6 +252,11 @@ void follow_full_screen() {
       g->metal_layer.contentsScale = scale;
     if (!CGSizeEqualToSize(g->metal_layer.drawableSize, size))
       g->metal_layer.drawableSize = size;
+    // An untagged layer counts as sRGB, which macOS would convert to a wider
+    // display's colours; tagged as the screen's own, values pass through.
+    const CGColorSpaceRef space = g->window.screen.colorSpace.CGColorSpace;
+    if (space && !CFEqual(space, g->metal_layer.colorspace))
+      g->metal_layer.colorspace = space;
   }
   if (full == g->full_screen)
     return;

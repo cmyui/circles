@@ -13,6 +13,9 @@
 //   through a CAMetalLayer, synced to its refresh. The layer has two
 //   drawables, one on screen and one to draw: as soon as the display frees
 //   one, the game loop draws into it, and it shows at the next refresh.
+//
+// Either way, colour values reach the display unconverted, as its own colour
+// space: a wide-gamut display shows its full range.
 
 #include <circles/types.h>
 
