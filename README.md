@@ -39,9 +39,26 @@ the display depends on the window:
   display, one per refresh: each is drawn as soon as the display frees a
   buffer, and shows at the next refresh.
 
-To measure: F8 records a profile to `perf/` (F8 again saves it) for
-`tools/perf_summary.py`. In full screen the profile also times each frame
-from the start of its drawing to the display showing it.
+The bottom-right corner shows, for example,
+`120 fps   1000 updates/s   screen 12.4 ms   sound 19.8 ms`:
+
+- **fps**: frames the display showed per second, as Metal reports them, in
+  full screen. Windowed, macOS doesn't report what the compositor shows, so
+  it reads **drawn/s**: frames drawn per second.
+- **updates/s**: game loop passes per second, each reading input, advancing
+  the game and starting sounds.
+- **screen**: from a key or button press, as macOS stamped it, to the first
+  frame drawn after it being on screen. Full screen only; `-` windowed.
+- **sound**: from a press to its hitsound leaving the speakers: the wait for
+  the game loop to read it, half an audio cycle on average, and the output
+  device's delay as Core Audio reports it.
+
+Latencies are medians of the last second's presses, and hold their value
+between presses.
+
+To measure further: F8 records a profile to `perf/` (F8 again saves it)
+for `tools/perf_summary.py`. In full screen the profile also times each
+frame from the start of its drawing to the display showing it.
 
 ## Beatmaps
 

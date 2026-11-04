@@ -92,15 +92,17 @@ void gpu_draw_pieces(GpuTexture*          colour,
 // gpu_take_frame_times.
 void gpu_end_frame(i64 tag);
 
+// Times are seconds of uptime, the clock macOS stamps input events with.
 struct GpuFrameTime {
   i64 tag;
-  f32 gpu_ms;  // the GPU's time on the frame
-  // From starting to draw the frame to the display showing it, as Metal
-  // reports it; -1 windowed, where the compositor doesn't say.
-  f32 shown_ms;
+  f32 gpu_ms;  // the GPU's time on the frame, or -1 in a report of `shown`
+  f64 drawn;   // when its drawing started
+  // When the display showed it, as Metal reports it; -1 until then, and
+  // windowed, where the compositor doesn't say.
+  f64 shown;
 };
-// Frames finished since the last call. A frame shown on the display arrives
-// once it's shown.
+// Reports since the last call: one when the GPU finishes a frame, and full
+// screen, another once it's shown.
 void gpu_take_frame_times(std::vector<GpuFrameTime>& times);
 
 }  // namespace circles

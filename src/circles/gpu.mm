@@ -597,8 +597,7 @@ void gpu_end_frame(i64 tag) {
       if (drawable.presentedTime <= 0)
         return;  // dropped
       std::lock_guard lock(gpu->times_mutex);
-      gpu->times.push_back(
-          {tag, -1, static_cast<f32>((drawable.presentedTime - begun) * 1000)});
+      gpu->times.push_back({tag, -1, begun, drawable.presentedTime});
     }];
     [g->commands presentDrawable:g->drawable];
   }
@@ -610,7 +609,7 @@ void gpu_end_frame(i64 tag) {
           {tag,
            static_cast<f32>((commands.GPUEndTime - commands.GPUStartTime) *
                             1000),
-           -1});
+           begun, -1});
     }
     dispatch_semaphore_signal(in_flight);
   }];

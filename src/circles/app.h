@@ -283,6 +283,25 @@ struct Backdrop {
   f64                changed = -1e9;  // wall seconds
 };
 
+// The corner readout's latencies, as medians of the last second's presses:
+// from a press, as macOS stamped it, to the first frame drawn after it being
+// on screen, and to its hitsound leaving the speakers. Times are seconds of
+// uptime, the clock input events are stamped with.
+struct Readout {
+  struct Press {
+    f64 event;   // when macOS stamped it
+    f64 polled;  // when the game loop read it
+  };
+  std::deque<Press>               presses;  // not yet seen on screen
+  std::deque<std::pair<f64, f32>> to_screen, to_sound;  // when, ms
+  std::vector<GpuFrameTime>       reports;    // the GPU's, being handled
+  i32                             shown = 0;  // frames since shown_rate was set
+  // Frames per second the display showed: only known full screen, else 0.
+  i32                             shown_rate = 0;
+  f32                             screen_ms = -1;  // -1 until known
+  f32                             sound_ms = -1;
+};
+
 // Not movable: Audio must stay put.
 struct App {
   Profiler                 profiler;
@@ -354,6 +373,7 @@ struct App {
   i32                    fps_frames = 0;
   i32                    updates = 0;
   f64                    fps_window_start = 0;
+  Readout                readout;
   std::string            toast;
   f64                    toast_time = -1e9;
   bool                   quit = false;

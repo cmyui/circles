@@ -428,6 +428,62 @@ void import_dropped(App& app) {
     select_enter(app);
 }
 
+// A press, for the readout. Its hitsound starts at the audio's next cycle,
+// on average half of one away, and leaves the speakers the output's delay
+// later; whether it shows on screen is known once a later frame is.
+void note_press(App& app) {
+  const f64 polled = uptime();
+  const f64 stamped = last_input_event_time();
+  const f64 event = stamped < 0 ? polled : std::min(stamped, polled);
+  auto&     readout = app.readout;
+  readout.presses.push_back({event, polled});
+  readout.to_sound.push_back(
+      {polled, static_cast<f32>((polled - event) * 1000 +
+                                audio_cycle_ms(app.audio) / 2 +
+                                app.audio.output_latency)});
+}
+
+// Takes the GPU's reports: to the profiler, and full screen, frames shown,
+// each the screen time of the presses read before its drawing started.
+void take_gpu_reports(App& app) {
+  auto& readout = app.readout;
+  readout.reports.clear();
+  gpu_take_frame_times(readout.reports);
+  profile_gpu_times(app.profiler, readout.reports);
+  for (const GpuFrameTime& report : readout.reports) {
+    if (report.shown < 0)
+      continue;
+    ++readout.shown;
+    while (!readout.presses.empty() &&
+           readout.presses.front().polled <= report.drawn) {
+      readout.to_screen.push_back(
+          {report.shown,
+           static_cast<f32>((report.shown - readout.presses.front().event) *
+                            1000)});
+      readout.presses.pop_front();
+    }
+  }
+  // Windowed, no frame reports being shown.
+  const f64 now = uptime();
+  while (!readout.presses.empty() && now - readout.presses.front().polled > 1)
+    readout.presses.pop_front();
+}
+
+// The median of samples since `since`, dropping older ones; `previous` when
+// there are none, so the readout holds its last value between presses.
+f32 median_since(std::deque<std::pair<f64, f32>>& samples,
+                 f64                              since,
+                 f32                              previous) {
+  while (!samples.empty() && samples.front().first < since)
+    samples.pop_front();
+  if (samples.empty())
+    return previous;
+  std::vector<f32> values;
+  for (const auto& [when, ms] : samples)
+    values.push_back(ms);
+  return percentile(values, 0.5f);
+}
+
 void draw_overlays(App& app) {
   auto& r = app.renderer;
   if (app.settings_menu.open)
@@ -447,9 +503,19 @@ void draw_overlays(App& app) {
               Align::Center);
   }
 
-  char fps[48];
-  snprintf(fps, sizeof(fps), "%d fps   %d updates/s", app.fps, app.update_rate);
-  draw_text_shadowed(r, app.regular, fps, app.width - 10, app.height - 8, 13,
+  // Full screen, frames shown; windowed, macOS doesn't report what the
+  // compositor shows, so frames drawn, and no time to the screen.
+  const auto& readout = app.readout;
+  char        screen[16] = "-", sound[16] = "-", line[96];
+  if (readout.screen_ms >= 0)
+    snprintf(screen, sizeof(screen), "%.1f ms", readout.screen_ms);
+  if (readout.sound_ms >= 0)
+    snprintf(sound, sizeof(sound), "%.1f ms", readout.sound_ms);
+  snprintf(line, sizeof(line), "%d %s   %d updates/s   screen %s   sound %s",
+           readout.shown_rate ? readout.shown_rate : app.fps,
+           readout.shown_rate ? "fps" : "drawn/s", app.update_rate, screen,
+           sound);
+  draw_text_shadowed(r, app.regular, line, app.width - 10, app.height - 8, 13,
                      fade(kWhite, 0.6f), Align::Right);
 
   if (app.transition_started >= 0) {
@@ -535,12 +601,23 @@ void app_update(App& app, f64 now) {
   app.pixel_height = pixels_high;
 
   ++app.updates;
+  take_gpu_reports(app);
   if (now - app.fps_window_start >= 0.5) {
     const f64 span = now - app.fps_window_start;
     app.fps = static_cast<i32>(std::lround(app.fps_frames / span));
     app.update_rate = static_cast<i32>(std::lround(app.updates / span));
+    auto& readout = app.readout;
+    readout.shown_rate = static_cast<i32>(std::lround(readout.shown / span));
+    const f64 second_ago = uptime() - 1;
+    readout.screen_ms =
+        readout.shown_rate
+            ? median_since(readout.to_screen, second_ago, readout.screen_ms)
+            : -1;
+    readout.sound_ms =
+        median_since(readout.to_sound, second_ago, readout.sound_ms);
     app.fps_frames = 0;
     app.updates = 0;
+    readout.shown = 0;
     app.fps_window_start = now;
   }
   update_backdrop(app);
@@ -622,6 +699,8 @@ f64 input_time() {
 }
 
 void app_key(App& app, i32 key, i32 action) {
+  if (action == GLFW_PRESS)
+    note_press(app);
   const bool control =
       glfwGetKey(app.window, GLFW_KEY_LEFT_CONTROL) == GLFW_PRESS ||
       glfwGetKey(app.window, GLFW_KEY_RIGHT_CONTROL) == GLFW_PRESS;
@@ -696,6 +775,8 @@ void app_char(App& app, u32 codepoint) {
 }
 
 void app_mouse_button(App& app, i32 button, i32 action) {
+  if (action == GLFW_PRESS)
+    note_press(app);
   if (app.settings_menu.open) {
     settings_click(app, button, action);
     return;

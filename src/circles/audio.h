@@ -123,6 +123,9 @@ void audio_shutdown(Audio& audio);
 // Re-reads output_latency when the output device has changed, such as when
 // headphones are plugged in. Call from the main thread.
 void update_output_latency(Audio& audio);
+// How often the output mixes a new buffer, in ms: a sound started waits up
+// to this long for its first.
+f64 audio_cycle_ms(const Audio& audio);
 
 // Replaces every effect: decoded from the file `find_file` returns for its
 // stem, or synthesized when that's an empty path or won't decode.
