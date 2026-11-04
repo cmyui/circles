@@ -8,7 +8,9 @@ namespace circles {
 
 namespace {
 
-f64 last_event_time = -1;
+f64                     last_event_time = -1;
+std::vector<InputPress> presses;
+NSEventModifierFlags    modifiers = 0;
 
 bool classify(NSEvent* event, InputKind& kind, InputDevice& device) {
   device = InputDevice::Mouse;
@@ -23,12 +25,23 @@ bool classify(NSEvent* event, InputKind& kind, InputDevice& device) {
       kind = InputKind::KeyUp;
       device = InputDevice::Keyboard;
       return true;
+    case NSEventTypeFlagsChanged: {
+      // A modifier key: down if it set a flag that wasn't.
+      const NSEventModifierFlags flags =
+          event.modifierFlags & NSEventModifierFlagDeviceIndependentFlagsMask;
+      kind = flags & ~modifiers ? InputKind::KeyDown : InputKind::KeyUp;
+      modifiers = flags;
+      device = InputDevice::Keyboard;
+      return true;
+    }
     case NSEventTypeLeftMouseDown:
     case NSEventTypeRightMouseDown:
+    case NSEventTypeOtherMouseDown:
       kind = InputKind::ButtonDown;
       break;
     case NSEventTypeLeftMouseUp:
     case NSEventTypeRightMouseUp:
+    case NSEventTypeOtherMouseUp:
       kind = InputKind::ButtonUp;
       break;
     case NSEventTypeMouseMoved:
@@ -54,9 +67,11 @@ bool classify(NSEvent* event, InputKind& kind, InputDevice& device) {
 void install_input_monitor(Profiler& profiler) {
   Profiler* const     target = &profiler;
   const NSEventMask   mask =
-      NSEventMaskKeyDown | NSEventMaskKeyUp | NSEventMaskLeftMouseDown |
-      NSEventMaskLeftMouseUp | NSEventMaskRightMouseDown |
-      NSEventMaskRightMouseUp | NSEventMaskMouseMoved |
+      NSEventMaskKeyDown | NSEventMaskKeyUp | NSEventMaskFlagsChanged |
+      NSEventMaskLeftMouseDown | NSEventMaskLeftMouseUp |
+      NSEventMaskRightMouseDown | NSEventMaskRightMouseUp |
+      NSEventMaskOtherMouseDown | NSEventMaskOtherMouseUp |
+      NSEventMaskMouseMoved |
       NSEventMaskLeftMouseDragged | NSEventMaskRightMouseDragged |
       NSEventMaskTabletPoint;
   [NSEvent addLocalMonitorForEventsMatchingMask:mask
@@ -69,6 +84,10 @@ void install_input_monitor(Profiler& profiler) {
                                           // the same event.
                                           if (kind != InputKind::Move)
                                             last_event_time = event.timestamp;
+                                          if (kind == InputKind::KeyDown ||
+                                              kind == InputKind::ButtonDown)
+                                            presses.push_back(
+                                                {event.timestamp, uptime()});
                                           if (target->active &&
                                               target->in_frame) {
                                             target->inputs.push_back(
@@ -84,6 +103,11 @@ void install_input_monitor(Profiler& profiler) {
 
 f64 last_input_event_time() {
   return last_event_time;
+}
+
+void take_input_presses(std::vector<InputPress>& out) {
+  out.insert(out.end(), presses.begin(), presses.end());
+  presses.clear();
 }
 
 void set_mouse_coalescing(bool enabled) {

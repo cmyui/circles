@@ -428,19 +428,41 @@ void import_dropped(App& app) {
     select_enter(app);
 }
 
-// A press, for the readout. Its hitsound starts at the audio's next cycle,
-// on average half of one away, and leaves the speakers the output's delay
-// later; whether it shows on screen is known once a later frame is.
-void note_press(App& app) {
-  const f64 polled = uptime();
-  const f64 stamped = last_input_event_time();
-  const f64 event = stamped < 0 ? polled : std::min(stamped, polled);
-  auto&     readout = app.readout;
-  readout.presses.push_back({event, polled});
-  readout.to_sound.push_back(
-      {polled, static_cast<f32>((polled - event) * 1000 +
-                                audio_cycle_ms(app.audio) / 2 +
-                                app.audio.output_latency)});
+// How many presses the readout's latencies are the median of.
+constexpr size_t kReadoutPresses = 30;
+// A press read this long after it happened, or first drawn this long after
+// it was read, met a stalled game loop, as while a map loads: it says
+// nothing about the usual delays.
+constexpr f64    kStall = 0.1;
+
+void add_sample(std::deque<f32>& samples, f64 seconds) {
+  samples.push_back(static_cast<f32>(seconds * 1000));
+  if (samples.size() > kReadoutPresses)
+    samples.pop_front();
+}
+
+f32 median(const std::deque<f32>& samples) {
+  return samples.empty() ? -1
+                         : percentile({samples.begin(), samples.end()}, 0.5f);
+}
+
+// Presses since the last pass, for the readout. A press's hitsound starts at
+// the audio's next cycle, on average half of one away, and leaves the
+// speakers the output's delay later; whether it shows on screen is known
+// once a later frame is.
+void take_presses(App& app) {
+  auto& readout = app.readout;
+  readout.new_presses.clear();
+  take_input_presses(readout.new_presses);
+  for (const InputPress& press : readout.new_presses) {
+    const f64 waited = press.received - press.event_time;
+    if (waited > kStall)
+      continue;
+    readout.presses.push_back(press);
+    add_sample(readout.to_sound, waited + (audio_cycle_ms(app.audio) / 2 +
+                                           app.audio.output_latency) /
+                                              1000);
+  }
 }
 
 // Takes the GPU's reports: to the profiler, and full screen, frames shown,
@@ -455,33 +477,17 @@ void take_gpu_reports(App& app) {
       continue;
     ++readout.shown;
     while (!readout.presses.empty() &&
-           readout.presses.front().polled <= report.drawn) {
-      readout.to_screen.push_back(
-          {report.shown,
-           static_cast<f32>((report.shown - readout.presses.front().event) *
-                            1000)});
+           readout.presses.front().received <= report.drawn) {
+      const InputPress& press = readout.presses.front();
+      if (report.drawn - press.received <= kStall)
+        add_sample(readout.to_screen, report.shown - press.event_time);
       readout.presses.pop_front();
     }
   }
   // Windowed, no frame reports being shown.
   const f64 now = uptime();
-  while (!readout.presses.empty() && now - readout.presses.front().polled > 1)
+  while (!readout.presses.empty() && now - readout.presses.front().received > 1)
     readout.presses.pop_front();
-}
-
-// The median of samples since `since`, dropping older ones; `previous` when
-// there are none, so the readout holds its last value between presses.
-f32 median_since(std::deque<std::pair<f64, f32>>& samples,
-                 f64                              since,
-                 f32                              previous) {
-  while (!samples.empty() && samples.front().first < since)
-    samples.pop_front();
-  if (samples.empty())
-    return previous;
-  std::vector<f32> values;
-  for (const auto& [when, ms] : samples)
-    values.push_back(ms);
-  return percentile(values, 0.5f);
 }
 
 void draw_overlays(App& app) {
@@ -601,6 +607,7 @@ void app_update(App& app, f64 now) {
   app.pixel_height = pixels_high;
 
   ++app.updates;
+  take_presses(app);
   take_gpu_reports(app);
   if (now - app.fps_window_start >= 0.5) {
     const f64 span = now - app.fps_window_start;
@@ -608,13 +615,8 @@ void app_update(App& app, f64 now) {
     app.update_rate = static_cast<i32>(std::lround(app.updates / span));
     auto& readout = app.readout;
     readout.shown_rate = static_cast<i32>(std::lround(readout.shown / span));
-    const f64 second_ago = uptime() - 1;
-    readout.screen_ms =
-        readout.shown_rate
-            ? median_since(readout.to_screen, second_ago, readout.screen_ms)
-            : -1;
-    readout.sound_ms =
-        median_since(readout.to_sound, second_ago, readout.sound_ms);
+    readout.screen_ms = readout.shown_rate ? median(readout.to_screen) : -1;
+    readout.sound_ms = median(readout.to_sound);
     app.fps_frames = 0;
     app.updates = 0;
     readout.shown = 0;
@@ -699,8 +701,6 @@ f64 input_time() {
 }
 
 void app_key(App& app, i32 key, i32 action) {
-  if (action == GLFW_PRESS)
-    note_press(app);
   const bool control =
       glfwGetKey(app.window, GLFW_KEY_LEFT_CONTROL) == GLFW_PRESS ||
       glfwGetKey(app.window, GLFW_KEY_RIGHT_CONTROL) == GLFW_PRESS;
@@ -775,8 +775,6 @@ void app_char(App& app, u32 codepoint) {
 }
 
 void app_mouse_button(App& app, i32 button, i32 action) {
-  if (action == GLFW_PRESS)
-    note_press(app);
   if (app.settings_menu.open) {
     settings_click(app, button, action);
     return;

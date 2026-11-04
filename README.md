@@ -53,8 +53,10 @@ The bottom-right corner shows, for example,
   the game loop to read it, half an audio cycle on average, and the output
   device's delay as Core Audio reports it.
 
-Latencies are medians of the last second's presses, and hold their value
-between presses.
+Latencies are medians of the last 30 presses, of any key, modifiers
+included, or mouse button. A press is left out when the game loop was
+stalled for over 100 ms before reading it or drawing a frame after it, as
+while a map loads, since that says nothing about the usual delays.
 
 To measure further: F8 records a profile to `perf/` (F8 again saves it)
 for `tools/perf_summary.py`. In full screen the profile also times each

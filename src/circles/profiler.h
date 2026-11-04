@@ -78,6 +78,16 @@ void profile_frame_end(Profiler& profiler, u32 draw_calls, u32 vertices);
 // handled, or a negative value before any.
 f64 last_input_event_time();
 
+// A key or button going down, as macOS stamped it, and when circles read
+// it; both uptime seconds.
+struct InputPress {
+  f64 event_time;
+  f64 received;
+};
+// Presses read since the last call: keys, modifiers included, and every
+// mouse button; not key repeats.
+void take_input_presses(std::vector<InputPress>& presses);
+
 // Platform glue (profiler_macos.mm).
 void install_input_monitor(Profiler& profiler);
 void set_mouse_coalescing(bool enabled);
