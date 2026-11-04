@@ -428,16 +428,16 @@ void import_dropped(App& app) {
     select_enter(app);
 }
 
-// How many presses the readout's latencies are the median of.
-constexpr size_t kReadoutPresses = 30;
-// A press read this long after it happened, or first drawn this long after
-// it was read, met a stalled game loop, as while a map loads: it says
-// nothing about the usual delays.
+// How many recent frames and presses the readout's medians cover.
+constexpr size_t kDisplaySamples = 120;
+constexpr size_t kInputSamples = 30;
+// A press read this long after it happened met a stalled game loop, as
+// while a map loads: it says nothing about the usual delay.
 constexpr f64    kStall = 0.1;
 
-void add_sample(std::deque<f32>& samples, f64 seconds) {
+void add_sample(std::deque<f32>& samples, size_t keep, f64 seconds) {
   samples.push_back(static_cast<f32>(seconds * 1000));
-  if (samples.size() > kReadoutPresses)
+  if (samples.size() > keep)
     samples.pop_front();
 }
 
@@ -446,48 +446,27 @@ f32 median(const std::deque<f32>& samples) {
                          : percentile({samples.begin(), samples.end()}, 0.5f);
 }
 
-// Presses since the last pass, for the readout. A press's hitsound starts at
-// the audio's next cycle, on average half of one away, and leaves the
-// speakers the output's delay later; whether it shows on screen is known
-// once a later frame is.
-void take_presses(App& app) {
-  auto& readout = app.readout;
-  readout.new_presses.clear();
-  take_input_presses(readout.new_presses);
-  for (const InputPress& press : readout.new_presses) {
-    const f64 waited = press.received - press.event_time;
-    if (waited > kStall)
-      continue;
-    readout.presses.push_back(press);
-    add_sample(readout.to_sound, waited + (audio_cycle_ms(app.audio) / 2 +
-                                           app.audio.output_latency) /
-                                              1000);
-  }
-}
-
-// Takes the GPU's reports: to the profiler, and full screen, frames shown,
-// each the screen time of the presses read before its drawing started.
-void take_gpu_reports(App& app) {
+// Takes the readout's samples: from the GPU's reports, how long each frame
+// shown took from its drawing to the display, and from the input monitor,
+// how long each press took to be read. The GPU's reports go to the
+// profiler too.
+void take_samples(App& app) {
   auto& readout = app.readout;
   readout.reports.clear();
   gpu_take_frame_times(readout.reports);
   profile_gpu_times(app.profiler, readout.reports);
-  for (const GpuFrameTime& report : readout.reports) {
-    if (report.shown < 0)
-      continue;
-    ++readout.shown;
-    while (!readout.presses.empty() &&
-           readout.presses.front().received <= report.drawn) {
-      const InputPress& press = readout.presses.front();
-      if (report.drawn - press.received <= kStall)
-        add_sample(readout.to_screen, report.shown - press.event_time);
-      readout.presses.pop_front();
+  for (const GpuFrameTime& report : readout.reports)
+    if (report.shown >= 0) {
+      ++readout.shown;
+      add_sample(readout.display, kDisplaySamples, report.shown - report.drawn);
     }
+  readout.presses.clear();
+  take_input_presses(readout.presses);
+  for (const InputPress& press : readout.presses) {
+    const f64 waited = press.received - press.event_time;
+    if (waited <= kStall)
+      add_sample(readout.input, kInputSamples, waited);
   }
-  // Windowed, no frame reports being shown.
-  const f64 now = uptime();
-  while (!readout.presses.empty() && now - readout.presses.front().received > 1)
-    readout.presses.pop_front();
 }
 
 void draw_overlays(App& app) {
@@ -510,17 +489,21 @@ void draw_overlays(App& app) {
   }
 
   // Full screen, frames shown; windowed, macOS doesn't report what the
-  // compositor shows, so frames drawn, and no time to the screen.
+  // compositor shows, so frames drawn, and no display time.
   const auto& readout = app.readout;
-  char        screen[16] = "-", sound[16] = "-", line[96];
-  if (readout.screen_ms >= 0)
-    snprintf(screen, sizeof(screen), "%.1f ms", readout.screen_ms);
-  if (readout.sound_ms >= 0)
-    snprintf(sound, sizeof(sound), "%.1f ms", readout.sound_ms);
-  snprintf(line, sizeof(line), "%d %s   %d updates/s   screen %s   sound %s",
+  const auto  ms = [](char (&text)[16], f32 value) {
+    if (value >= 0)
+      snprintf(text, sizeof(text), "%.1f ms", value);
+  };
+  char display[16] = "-", audio[16] = "-", input[16] = "-", line[128];
+  ms(display, readout.display_ms);
+  ms(audio, readout.audio_ms);
+  ms(input, readout.input_ms);
+  snprintf(line, sizeof(line),
+           "%d %s   %d updates/s   display %s   audio %s   input %s",
            readout.shown_rate ? readout.shown_rate : app.fps,
-           readout.shown_rate ? "fps" : "drawn/s", app.update_rate, screen,
-           sound);
+           readout.shown_rate ? "fps" : "drawn/s", app.update_rate, display,
+           audio, input);
   draw_text_shadowed(r, app.regular, line, app.width - 10, app.height - 8, 13,
                      fade(kWhite, 0.6f), Align::Right);
 
@@ -607,16 +590,21 @@ void app_update(App& app, f64 now) {
   app.pixel_height = pixels_high;
 
   ++app.updates;
-  take_presses(app);
-  take_gpu_reports(app);
+  take_samples(app);
   if (now - app.fps_window_start >= 0.5) {
     const f64 span = now - app.fps_window_start;
     app.fps = static_cast<i32>(std::lround(app.fps_frames / span));
     app.update_rate = static_cast<i32>(std::lround(app.updates / span));
     auto& readout = app.readout;
     readout.shown_rate = static_cast<i32>(std::lround(readout.shown / span));
-    readout.screen_ms = readout.shown_rate ? median(readout.to_screen) : -1;
-    readout.sound_ms = median(readout.to_sound);
+    readout.display_ms = readout.shown_rate ? median(readout.display) : -1;
+    // A sound started waits for the audio's next cycle, half of one on
+    // average, then takes the output's delay to leave the speakers.
+    readout.audio_ms = app.audio.ready
+                           ? static_cast<f32>(audio_cycle_ms(app.audio) / 2 +
+                                              app.audio.output_latency)
+                           : -1;
+    readout.input_ms = median(readout.input);
     app.fps_frames = 0;
     app.updates = 0;
     readout.shown = 0;

@@ -283,20 +283,19 @@ struct Backdrop {
   f64                changed = -1e9;  // wall seconds
 };
 
-// The corner readout's latencies, as medians of recent presses: from a
-// press, as macOS stamped it, to the first frame drawn after it being on
-// screen, and to its hitsound leaving the speakers. Times are seconds of
-// uptime, the clock input events are stamped with.
+// The corner readout's latencies, by stage: drawing a frame to the display
+// showing it, a sound started to the speakers, and a press to the game
+// reading it.
 struct Readout {
-  std::deque<InputPress>    presses;              // not yet seen on screen
-  std::vector<InputPress>   new_presses;          // being handled
-  std::deque<f32>           to_screen, to_sound;  // ms, newest last
-  std::vector<GpuFrameTime> reports;              // the GPU's, being handled
-  i32                       shown = 0;  // frames since shown_rate was set
+  std::vector<InputPress>   presses;         // being handled
+  std::vector<GpuFrameTime> reports;         // the GPU's, being handled
+  std::deque<f32>           display, input;  // recent samples, ms
+  i32                       shown = 0;       // frames since shown_rate was set
   // Frames per second the display showed: only known full screen, else 0.
   i32                       shown_rate = 0;
-  f32                       screen_ms = -1;  // -1 until known
-  f32                       sound_ms = -1;
+  f32                       display_ms = -1;  // -1 where not known
+  f32                       audio_ms = -1;
+  f32                       input_ms = -1;
 };
 
 // Not movable: Audio must stay put.
