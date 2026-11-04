@@ -349,8 +349,6 @@ struct App {
   Vec2                   cursor{};
   f64                    cursor_moved = -1e9;  // wall seconds
   std::deque<TrailPoint> trail;
-  bool                   fullscreen = false;
-  i32                    windowed[4] = {};  // x, y, width, height to restore
 
   i32                    fps = 0;
   i32                    fps_frames = 0;
@@ -372,6 +370,9 @@ void app_cursor(App& app, f64 x, f64 y);
 void app_focus(App& app, bool focused);
 // Files dropped on the window: .osz beatmap archives are imported.
 void app_drop(App& app, std::span<const char* const> paths);
+
+// window_macos.mm
+void toggle_fullscreen(App& app);
 
 // Fades out, switches, and fades back in.
 void switch_screen(App& app, Screen screen);

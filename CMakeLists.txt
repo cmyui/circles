@@ -52,6 +52,7 @@ add_library(circles_core STATIC
   src/circles/slider_body.cc
   src/circles/song_select.cc
   src/circles/stretch.cc
+  src/circles/window_macos.mm
 )
 target_include_directories(circles_core PUBLIC src)
 target_compile_definitions(circles_core PUBLIC GL_SILENCE_DEPRECATION)
