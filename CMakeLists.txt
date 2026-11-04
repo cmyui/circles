@@ -53,6 +53,8 @@ add_library(circles_core STATIC
   src/circles/slider_body.cc
   src/circles/song_select.cc
   src/circles/stretch.cc
+  src/circles/tablet.cc
+  src/circles/tablet_macos.mm
   src/circles/window_macos.mm
 )
 target_include_directories(circles_core PUBLIC src)
@@ -85,7 +87,7 @@ add_custom_command(TARGET circles POST_BUILD
 
 if(BUILD_TESTING)
   set(_tests rules archive skin hitsounds md5 replay stretch mods hit_objects
-  slider_body)
+  slider_body tablet)
   set(_test_targets)
   foreach(name IN LISTS _tests)
     list(APPEND _test_targets test_${name})

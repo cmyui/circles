@@ -1,6 +1,7 @@
 // macOS's input events, for their own timestamps: when the device's report
 // reached the system, which GLFW's callbacks don't carry.
 #include <circles/profiler.h>
+#include <circles/tablet.h>
 
 #import <AppKit/AppKit.h>
 #import <IOKit/hid/IOHIDKeys.h>
@@ -33,16 +34,23 @@ struct PointerListener {
 };
 PointerListener* pointers = nullptr;
 
-void on_pointer_report(void*,
+// Each report's arrival, for timing the driver; the tablet's (`tablet` set)
+// also go to be read.
+void on_pointer_report(void* tablet,
                        IOReturn,
                        void*,
                        IOHIDReportType,
                        uint32_t,
-                       uint8_t*,
-                       CFIndex,
+                       uint8_t* report,
+                       CFIndex  length,
                        uint64_t timestamp) {
-  std::lock_guard lock(pointers->mutex);
-  pointers->times.push_back(timestamp * pointers->tick);
+  const f64 arrived = timestamp * pointers->tick;
+  {
+    std::lock_guard lock(pointers->mutex);
+    pointers->times.push_back(arrived);
+  }
+  if (tablet)
+    tablet_report({report, static_cast<size_t>(length)}, arrived);
 }
 
 // Waits for the permission, then reads reports for good. On a thread of its
@@ -88,8 +96,9 @@ void listen() {
       if (size <= 0)
         continue;
       auto& buffer = pointers->buffers.emplace_back(size);
+      void* tablet = tablet_device(ref) ? ref : nullptr;
       IOHIDDeviceRegisterInputReportWithTimeStampCallback(
-          ref, buffer.data(), size, on_pointer_report, nullptr);
+          ref, buffer.data(), size, on_pointer_report, tablet);
     }
   }
   pointers->access = PointerAccess::Listening;

@@ -12,6 +12,7 @@
 #include <circles/replay.h>
 #include <circles/rules.h>
 #include <circles/skin.h>
+#include <circles/tablet.h>
 #include <circles/types.h>
 
 #include <fosu/beatmap.h>
@@ -298,6 +299,7 @@ struct Readout {
   f64                       keyboard_interval_ms = 0;
   // Being handled.
   std::vector<InputTiming>  new_presses, new_moves;
+  std::vector<InputTiming>  pen_moves;  // the pen's, read directly
   std::vector<GpuFrameTime> reports;
   std::vector<f64>          waits;
   // Read, until a frame drawn after them is shown, and until a frame starts
@@ -376,6 +378,17 @@ struct App {
   f32                      cursor_size = 1;
   // Whether a map's own combo colours replace the skin's.
   bool                     beatmap_colours = true;
+  // The pen, read by circles itself rather than through its driver's
+  // cursor (F5): see tablet.h.
+  struct Pen {
+    bool                   direct = false;
+    TabletMapping          mapping;
+    Vec2                   offset{};  // virtual screen to display points
+    std::vector<PenReport> reports;   // being handled
+    f32                    tip_threshold = 1;  // pressure percent
+    bool                   in_range = false, tip = false;
+    f64                    last = -1;  // when its last report arrived
+  } pen;
   struct SettingsMenu {
     bool open = false;
     f64  changed = -1e9;  // wall seconds

@@ -47,6 +47,7 @@ struct Settings {
   f32         cursor_size = 1;
   bool        beatmap_colours = true;
   i32         readout = 1;  // Readout::mode
+  bool        pen_direct = false;
 };
 
 Settings load_settings() {
@@ -79,6 +80,8 @@ Settings load_settings() {
           std::clamp(static_cast<f32>(std::strtod(value, nullptr)), 0.1f, 2.0f);
     else if (key == "beatmap_colours")
       settings.beatmap_colours = std::strtol(value, nullptr, 10) != 0;
+    else if (key == "pen_direct")
+      settings.pen_direct = std::strtol(value, nullptr, 10) != 0;
     else if (key == "readout")
       settings.readout =
           std::clamp(static_cast<i32>(std::strtol(value, nullptr, 10)), 0, 2);
@@ -433,6 +436,107 @@ void import_dropped(App& app) {
     select_enter(app);
 }
 
+// Whether the pen, read directly, is aiming: while it's in range, its
+// driver's cursor, which the same pen moves, is ignored.
+bool pen_aiming(const App& app) {
+  return app.pen.direct && app.pen.in_range && uptime() - app.pen.last < 0.1;
+}
+
+void mouse_button(App& app, i32 button, i32 action, f64 time) {
+  if (app.settings_menu.open) {
+    settings_click(app, button, action);
+    return;
+  }
+  if (!accepting_input(app))
+    return;
+  switch (app.screen) {
+    case Screen::MainMenu:
+      menu_click(app, button, action);
+      break;
+    case Screen::SongSelect:
+      select_click(app, button, action);
+      break;
+    case Screen::Gameplay:
+      gameplay_click(app, button, action, time);
+      break;
+    case Screen::Results:
+      results_click(app, button, action);
+      break;
+  }
+}
+
+void set_cursor(App& app, f64 x, f64 y) {
+  app.cursor = {static_cast<f32>(x), static_cast<f32>(y)};
+  app.cursor_moved = app.now;
+  app.trail.push_back({glfwGetTime(), app.cursor});
+  settings_cursor(app);
+}
+
+// Aims and clicks with the pen's reports since the last pass, each at its
+// own time. The tip is the left button, as OpenTabletDriver binds it.
+void read_pen(App& app) {
+  auto& pen = app.pen;
+  if (!pen.direct)
+    return;
+  pen.reports.clear();
+  take_pen_reports(pen.reports);
+  if (pen.reports.empty())
+    return;
+  const f64 now = uptime();
+  const f64 to_glfw = glfwGetTime() - now;
+  i32       window_x, window_y;
+  glfwGetWindowPos(app.window, &window_x, &window_y);
+  const Vec2 origin =
+      pen.offset +
+      Vec2{static_cast<f32>(window_x), static_cast<f32>(window_y)};
+  for (const PenReport& report : pen.reports) {
+    pen.last = report.arrived;
+    pen.in_range = report.in_range;
+    Vec2 point;
+    if (report.in_range && map_pen(pen.mapping, report.x, report.y, point)) {
+      set_cursor(app, point.x - origin.x, point.y - origin.y);
+      app.readout.pen_moves.push_back({report.arrived, now});
+    }
+    const bool tip = report.in_range && report.pressure > pen.tip_threshold;
+    if (tip != pen.tip) {
+      pen.tip = tip;
+      mouse_button(app, GLFW_MOUSE_BUTTON_LEFT,
+                   tip ? GLFW_PRESS : GLFW_RELEASE, report.arrived + to_glfw);
+    }
+  }
+}
+
+// Switches between aiming with the pen read directly, mapped with
+// OpenTabletDriver's area, and with its driver's cursor.
+void set_pen_direct(App& app, bool on) {
+  auto&          pen = app.pen;
+  TabletSettings settings;
+  if (on && !load_tablet_settings(settings)) {
+    show_toast(app, "No OpenTabletDriver area for the CTL-472");
+    return;
+  }
+  pen.direct = on;
+  pen.in_range = pen.tip = false;
+  if (on) {
+    pen.mapping = tablet_mapping(settings);
+    pen.tip_threshold = settings.tip_threshold;
+    pen.offset = virtual_screen_offset();
+  }
+  read_tablet(on);
+  // The aim's figures start over, each describing one way of reading it.
+  auto& readout = app.readout;
+  for (LatencyStat* stat : {&readout.driver, &readout.aim_interval,
+                            &readout.aim_read, &readout.aim_wait,
+                            &readout.aim_screen})
+    *stat = {};
+  if (!on)
+    show_toast(app, "Pen: through its driver");
+  else if (listen_to_pointers() == PointerAccess::Listening)
+    show_toast(app, "Pen: read by circles");
+  else
+    show_toast(app, "Pen: read by circles once Input Monitoring is allowed");
+}
+
 // How many recent samples the readout's medians cover.
 constexpr size_t kReadoutSamples = 30;
 // Input read this long after it happened, or a frame drawn this long after
@@ -501,7 +605,15 @@ void take_samples(App& app) {
     }
   readout.new_moves.clear();
   take_input_moves(readout.new_moves);
-  for (const InputTiming& move : readout.new_moves) {
+  if (pen_aiming(app))
+    readout.new_moves.clear();
+  // The driver's movements, then the pen's own, which no driver made.
+  const size_t from_driver = readout.new_moves.size();
+  readout.new_moves.insert(readout.new_moves.end(), readout.pen_moves.begin(),
+                           readout.pen_moves.end());
+  readout.pen_moves.clear();
+  for (size_t i = 0; i < readout.new_moves.size(); ++i) {
+    const InputTiming& move = readout.new_moves[i];
     if (move.received - move.event_time > kStall)
       continue;
     add_sample(readout.aim_read, move.received - move.event_time);
@@ -512,7 +624,7 @@ void take_samples(App& app) {
     readout.last_move = std::max(readout.last_move, move.event_time);
     readout.moves.push_back(move);
     readout.waiting_moves.push_back(move);
-    if (readout.pointer_access == PointerAccess::Listening)
+    if (i < from_driver && readout.pointer_access == PointerAccess::Listening)
       readout.driver_moves.push_back(move);
   }
   time_driver(readout, now);
@@ -670,6 +782,9 @@ void draw_readout(App& app) {
       lines.push_back({"driver: allow Input Monitoring when macOS asks"});
     else if (readout.pointer_access == PointerAccess::Denied)
       lines.push_back({"driver: allow circles in Input Monitoring settings"});
+    lines.push_back({"pen ",
+                     app.pen.direct ? "read by circles" : "through its driver",
+                     "   (F5 switches)"});
     lines.push_back(rates);
   }
 
@@ -795,6 +910,8 @@ bool app_init(App& app) {
   app.beatmap_colours = settings.beatmap_colours;
   app.readout.mode = settings.readout;
   app.readout.keyboard_interval_ms = keyboard_report_interval();
+  if (settings.pen_direct)
+    set_pen_direct(app, true);
   set_master_volume(app.audio, settings.volume);
   const i32 imported =
       static_cast<i32>(import_archives(kBeatmapDirectory, ".osz").size());
@@ -837,6 +954,7 @@ void app_update(App& app, f64 now) {
   app.pixel_height = pixels_high;
 
   ++app.updates;
+  read_pen(app);
   take_samples(app);
   if (now - app.fps_window_start >= 0.25) {
     const f64 span = now - app.fps_window_start;
@@ -907,6 +1025,7 @@ bool app_draw(App& app) {
 }
 
 void app_shutdown(App& app) {
+  read_tablet(false);
   if (app.backdrop.loading.valid())
     app.backdrop.loading.wait();
   release_slider_bodies(app.game.bodies);
@@ -940,6 +1059,11 @@ void app_key(App& app, i32 key, i32 action) {
   }
   if (key == GLFW_KEY_F8 && action == GLFW_PRESS) {
     toggle_profiling(app);
+    return;
+  }
+  if (key == GLFW_KEY_F5 && action == GLFW_PRESS) {
+    set_pen_direct(app, !app.pen.direct);
+    save_settings(app);
     return;
   }
   if (key == GLFW_KEY_F6 && action == GLFW_PRESS) {
@@ -1006,26 +1130,8 @@ void app_char(App& app, u32 codepoint) {
 }
 
 void app_mouse_button(App& app, i32 button, i32 action) {
-  if (app.settings_menu.open) {
-    settings_click(app, button, action);
-    return;
-  }
-  if (!accepting_input(app))
-    return;
-  switch (app.screen) {
-    case Screen::MainMenu:
-      menu_click(app, button, action);
-      break;
-    case Screen::SongSelect:
-      select_click(app, button, action);
-      break;
-    case Screen::Gameplay:
-      gameplay_click(app, button, action, input_time());
-      break;
-    case Screen::Results:
-      results_click(app, button, action);
-      break;
-  }
+  if (!pen_aiming(app))
+    mouse_button(app, button, action, input_time());
 }
 
 void app_scroll(App& app, f64 dy) {
@@ -1041,10 +1147,8 @@ void app_scroll(App& app, f64 dy) {
 }
 
 void app_cursor(App& app, f64 x, f64 y) {
-  app.cursor = {static_cast<f32>(x), static_cast<f32>(y)};
-  app.cursor_moved = app.now;
-  app.trail.push_back({glfwGetTime(), app.cursor});
-  settings_cursor(app);
+  if (!pen_aiming(app))
+    set_cursor(app, x, y);
 }
 
 void app_drop(App& app, std::span<const char* const> paths) {
@@ -1179,6 +1283,7 @@ void save_settings(const App& app) {
   file << "frame_cap=" << app.frame_cap << '\n';
   file << "cursor_size=" << app.cursor_size << '\n';
   file << "beatmap_colours=" << app.beatmap_colours << '\n';
+  file << "pen_direct=" << app.pen.direct << '\n';
   file << "readout=" << app.readout.mode << '\n';
 }
 

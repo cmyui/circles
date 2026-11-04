@@ -107,6 +107,30 @@ To measure further: F8 records a profile to `perf/` (F8 again saves it)
 for `tools/perf_summary.py`. In full screen the profile also times each
 frame from the start of its drawing to the display showing it.
 
+## Tablet
+
+F5 switches how the pen aims, and is saved in `settings.txt`:
+
+- **Through its driver**, the default: the cursor macOS gets from the
+  tablet's driver, such as OpenTabletDriver.
+- **Read by circles**: circles reads the tablet's own reports and places the
+  cursor itself, skipping the driver and macOS's cursor events. In the stage
+  table, aim to screen then has no driver stage, and its read runs from a
+  report reaching macOS to the game using it.
+
+Reading the tablet needs the Input Monitoring permission, which F5 asks for.
+So far it reads one tablet, the One by Wacom S (CTL-472), decoding its
+reports as OpenTabletDriver does. It maps them with the area set in
+OpenTabletDriver (its `settings.json`), by OpenTabletDriver's own arithmetic,
+so the cursor lands where OpenTabletDriver's would. The tip clicks the left
+button past OpenTabletDriver's tip threshold; the side buttons aren't read.
+
+circles switches the tablet to sending pen reports itself, as
+OpenTabletDriver does, so OpenTabletDriver needn't be running. Switching
+back, or quitting, gives the tablet its previous mode again. While the pen
+is in range, its driver's cursor and clicks are ignored; a mouse or
+trackpad still works.
+
 ## Beatmaps
 
 Put `.osz` files or extracted beatmap folders in `beatmaps/`. At startup each
@@ -171,6 +195,7 @@ with them. Hidden and Flashlight make S and SS grades silver.
 | F10 | Mouse buttons on or off for hitting, saved in `settings.txt` |
 | F11 | Full screen, as the window's green button enters it: the display keeps its resolution |
 | F6 | Latency readout: a line, a table of stages, or hidden; saved in `settings.txt` |
+| F5 | The pen: read by circles, or through its driver (see Tablet); saved in `settings.txt` |
 | F1 | Mod select (song select) |
 
 In song select, type to search, use the arrow keys to choose, Enter to play
