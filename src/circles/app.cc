@@ -428,6 +428,46 @@ void import_dropped(App& app) {
     select_enter(app);
 }
 
+// How many recent frames, and presses, the readout's medians cover.
+constexpr size_t kReadoutSamples = 30;
+// A press read this long after it happened met a stalled game loop, as
+// while a map loads: it says nothing about the usual delay.
+constexpr f64    kStall = 0.1;
+
+void add_sample(std::deque<f32>& samples, f64 seconds) {
+  samples.push_back(static_cast<f32>(seconds * 1000));
+  if (samples.size() > kReadoutSamples)
+    samples.pop_front();
+}
+
+f32 median(const std::deque<f32>& samples) {
+  return samples.empty() ? -1
+                         : percentile({samples.begin(), samples.end()}, 0.5f);
+}
+
+// Takes the readout's samples: from the GPU's reports, how long each frame
+// shown took from its drawing to the display, and from the input monitor,
+// how long each press took to be read. The GPU's reports go to the
+// profiler too.
+void take_samples(App& app) {
+  auto& readout = app.readout;
+  readout.reports.clear();
+  gpu_take_frame_times(readout.reports);
+  profile_gpu_times(app.profiler, readout.reports);
+  for (const GpuFrameTime& report : readout.reports)
+    if (report.shown >= 0) {
+      ++readout.shown;
+      add_sample(readout.display, report.shown - report.drawn);
+    }
+  readout.presses.clear();
+  take_input_presses(readout.presses);
+  for (const InputPress& press : readout.presses) {
+    const f64 waited = press.received - press.event_time;
+    if (waited <= kStall)
+      add_sample(readout.input, waited);
+  }
+}
+
 void draw_overlays(App& app) {
   auto& r = app.renderer;
   if (app.settings_menu.open)
@@ -447,9 +487,23 @@ void draw_overlays(App& app) {
               Align::Center);
   }
 
-  char fps[48];
-  snprintf(fps, sizeof(fps), "%d fps   %d updates/s", app.fps, app.update_rate);
-  draw_text_shadowed(r, app.regular, fps, app.width - 10, app.height - 8, 13,
+  // Full screen, frames shown; windowed, macOS doesn't report what the
+  // compositor shows, so frames drawn, and no display time.
+  const auto& readout = app.readout;
+  const auto  ms = [](char (&text)[16], f32 value) {
+    if (value >= 0)
+      snprintf(text, sizeof(text), "%.1f ms", value);
+  };
+  char display[16] = "-", audio[16] = "-", input[16] = "-", line[128];
+  ms(display, readout.display_ms);
+  ms(audio, readout.audio_ms);
+  ms(input, readout.input_ms);
+  snprintf(line, sizeof(line),
+           "%d %s   %d updates/s   display %s   audio %s   input %s",
+           readout.shown_rate ? readout.shown_rate : app.fps,
+           readout.shown_rate ? "fps" : "drawn/s", app.update_rate, display,
+           audio, input);
+  draw_text_shadowed(r, app.regular, line, app.width - 10, app.height - 8, 13,
                      fade(kWhite, 0.6f), Align::Right);
 
   if (app.transition_started >= 0) {
@@ -535,12 +589,24 @@ void app_update(App& app, f64 now) {
   app.pixel_height = pixels_high;
 
   ++app.updates;
-  if (now - app.fps_window_start >= 0.5) {
+  take_samples(app);
+  if (now - app.fps_window_start >= 0.25) {
     const f64 span = now - app.fps_window_start;
     app.fps = static_cast<i32>(std::lround(app.fps_frames / span));
     app.update_rate = static_cast<i32>(std::lround(app.updates / span));
+    auto& readout = app.readout;
+    readout.shown_rate = static_cast<i32>(std::lround(readout.shown / span));
+    readout.display_ms = readout.shown_rate ? median(readout.display) : -1;
+    // A sound started waits for the audio's next cycle, half of one on
+    // average, then takes the output's delay to leave the speakers.
+    readout.audio_ms = app.audio.ready
+                           ? static_cast<f32>(audio_cycle_ms(app.audio) / 2 +
+                                              app.audio.output_latency)
+                           : -1;
+    readout.input_ms = median(readout.input);
     app.fps_frames = 0;
     app.updates = 0;
+    readout.shown = 0;
     app.fps_window_start = now;
   }
   update_backdrop(app);

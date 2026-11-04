@@ -469,6 +469,14 @@ bool audio_init(Audio& audio) {
   return true;
 }
 
+f64 audio_cycle_ms(const Audio& audio) {
+  const auto& playback = audio.device.playback;
+  return audio.ready && playback.internalSampleRate
+             ? 1000.0 * playback.internalPeriodSizeInFrames /
+                   playback.internalSampleRate
+             : 0;
+}
+
 void update_output_latency(Audio& audio) {
   if (audio.ready && audio.latency_stale.exchange(false))
     audio.output_latency = query_output_latency();

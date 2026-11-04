@@ -283,6 +283,21 @@ struct Backdrop {
   f64                changed = -1e9;  // wall seconds
 };
 
+// The corner readout's latencies, by stage: drawing a frame to the display
+// showing it, a sound started to the speakers, and a press to the game
+// reading it.
+struct Readout {
+  std::vector<InputPress>   presses;         // being handled
+  std::vector<GpuFrameTime> reports;         // the GPU's, being handled
+  std::deque<f32>           display, input;  // recent samples, ms
+  i32                       shown = 0;       // frames since shown_rate was set
+  // Frames per second the display showed: only known full screen, else 0.
+  i32                       shown_rate = 0;
+  f32                       display_ms = -1;  // -1 where not known
+  f32                       audio_ms = -1;
+  f32                       input_ms = -1;
+};
+
 // Not movable: Audio must stay put.
 struct App {
   Profiler                 profiler;
@@ -354,6 +369,7 @@ struct App {
   i32                    fps_frames = 0;
   i32                    updates = 0;
   f64                    fps_window_start = 0;
+  Readout                readout;
   std::string            toast;
   f64                    toast_time = -1e9;
   bool                   quit = false;

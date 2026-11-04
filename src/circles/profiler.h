@@ -6,9 +6,11 @@
 // input event records its own timestamp from macOS, which GLFW doesn't pass
 // on. Both are saved as CSV for tools/perf_summary.py.
 
+#include <circles/gpu.h>
 #include <circles/types.h>
 
 #include <array>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -68,11 +70,23 @@ void profile_frame_begin(Profiler& profiler, u8 screen);
 void profile_phase(Profiler& profiler, FramePhase phase);
 // What gpu_end_frame calls the frame being drawn, so its GPU times find it.
 i64 profile_frame_tag(const Profiler& profiler);
+// Puts the GPU's reports into the frames they're about.
+void profile_gpu_times(Profiler& profiler, std::span<const GpuFrameTime> times);
 void profile_frame_end(Profiler& profiler, u32 draw_calls, u32 vertices);
 
 // macOS's timestamp (uptime seconds) for the key or button event being
 // handled, or a negative value before any.
 f64 last_input_event_time();
+
+// A key or button going down, as macOS stamped it, and when circles read
+// it; both uptime seconds.
+struct InputPress {
+  f64 event_time;
+  f64 received;
+};
+// Presses read since the last call: keys, modifiers included, and every
+// mouse button; not key repeats.
+void take_input_presses(std::vector<InputPress>& presses);
 
 // Platform glue (profiler_macos.mm).
 void install_input_monitor(Profiler& profiler);

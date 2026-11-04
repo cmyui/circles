@@ -1,4 +1,3 @@
-#include <circles/gpu.h>
 #include <circles/profiler.h>
 
 #include <ctime>
@@ -35,30 +34,11 @@ const char* const kInputKinds[] = {"key_down", "key_up", "button_down",
                                    "button_up", "move"};
 const char* const kInputDevices[] = {"keyboard", "mouse", "tablet"};
 
-// Puts finished frames' GPU times into their records. The GPU's reports
-// are taken while not profiling too, so they don't pile up.
-void collect_gpu_times(Profiler& profiler) {
-  static std::vector<GpuFrameTime> times;
-  times.clear();
-  gpu_take_frame_times(times);
-  for (const GpuFrameTime& t : times) {
-    if (!profiler.active || t.tag < 0 ||
-        t.tag >= static_cast<i64>(profiler.frames.size()))
-      continue;
-    FrameRecord& frame = profiler.frames[t.tag];
-    if (t.gpu_ms >= 0)
-      frame.gpu_ms = t.gpu_ms;
-    if (t.shown_ms >= 0)
-      frame.shown_ms = t.shown_ms;
-  }
-}
-
 }  // namespace
 
 std::string profiler_stop(Profiler& profiler, const std::string& directory) {
   if (!profiler.active)
     return {};
-  collect_gpu_times(profiler);
   profiler.active = false;
   set_mouse_coalescing(true);
   std::error_code error;
@@ -96,7 +76,6 @@ std::string profiler_stop(Profiler& profiler, const std::string& directory) {
 }
 
 void profile_frame_begin(Profiler& profiler, u8 screen) {
-  collect_gpu_times(profiler);
   if (!profiler.active)
     return;
   const f64 now = uptime();
@@ -114,6 +93,20 @@ void profile_phase(Profiler& profiler, FramePhase phase) {
   profiler.current.phase_ms[static_cast<i32>(phase)] =
       static_cast<f32>((now - profiler.phase_start) * 1000);
   profiler.phase_start = now;
+}
+
+void profile_gpu_times(Profiler&                     profiler,
+                       std::span<const GpuFrameTime> times) {
+  for (const GpuFrameTime& t : times) {
+    if (!profiler.active || t.tag < 0 ||
+        t.tag >= static_cast<i64>(profiler.frames.size()))
+      continue;
+    FrameRecord& frame = profiler.frames[t.tag];
+    if (t.gpu_ms >= 0)
+      frame.gpu_ms = t.gpu_ms;
+    if (t.shown >= 0)
+      frame.shown_ms = static_cast<f32>((t.shown - t.drawn) * 1000);
+  }
 }
 
 i64 profile_frame_tag(const Profiler& profiler) {
