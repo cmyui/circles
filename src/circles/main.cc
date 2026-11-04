@@ -6,6 +6,8 @@
 #include <memory>
 #include <string>
 
+#include <unistd.h>
+
 namespace {
 
 circles::App& app_of(GLFWwindow* window) {
@@ -16,8 +18,10 @@ circles::App& app_of(GLFWwindow* window) {
 // profiling and exits at its results, saving the profile to perf/; given a
 // .osu, it watches Auto play the map.
 // `--size WxH` sets the window, and `--uncapped` lifts the cap on game loop
-// passes.
+// passes. `--working-dir DIR` runs in DIR, which holds shaders/, beatmaps/
+// and settings.txt: macOS starts an opened app in /.
 struct Options {
+  std::string working_dir;
   std::string benchmark;
   int         width = 0;
   int         height = 0;
@@ -27,7 +31,9 @@ struct Options {
 bool parse_options(int argc, char** argv, Options& options) {
   for (int i = 1; i < argc; ++i) {
     const bool has_value = i + 1 < argc;
-    if (!std::strcmp(argv[i], "--benchmark") && has_value)
+    if (!std::strcmp(argv[i], "--working-dir") && has_value)
+      options.working_dir = argv[++i];
+    else if (!std::strcmp(argv[i], "--benchmark") && has_value)
       options.benchmark = argv[++i];
     else if (!std::strcmp(argv[i], "--size") && has_value &&
              std::sscanf(argv[++i], "%dx%d", &options.width, &options.height) ==
@@ -37,8 +43,8 @@ bool parse_options(int argc, char** argv, Options& options) {
       options.uncapped = true;
     else {
       std::fprintf(stderr,
-                   "usage: circles [--benchmark replay.osr|map.osu] [--size "
-                   "WxH] [--uncapped]\n");
+                   "usage: circles [--working-dir DIR] [--benchmark "
+                   "replay.osr|map.osu] [--size WxH] [--uncapped]\n");
       return false;
     }
   }
@@ -51,6 +57,10 @@ int main(int argc, char** argv) {
   Options options;
   if (!parse_options(argc, argv, options))
     return 2;
+  if (!options.working_dir.empty() && chdir(options.working_dir.c_str()) != 0) {
+    std::perror(options.working_dir.c_str());
+    return 2;
+  }
   // On the heap so the audio engine inside never moves.
   auto app = std::make_unique<circles::App>();
   if (!circles::app_init(*app))

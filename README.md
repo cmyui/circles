@@ -21,10 +21,18 @@ make test    # rule, archive, skin and replay tests
 make format  # clang-format the sources
 ```
 
-The game reads `shaders/`, `beatmaps/`, `skins/` and `replays/` from the
-working directory, so run it from this folder. It builds as an app bundle,
-`build/circles.app`, which marks it as a game: macOS turns on Game Mode while
-it's full screen (F11), giving it priority on the CPU and GPU.
+The game reads `shaders/`, `beatmaps/`, `skins/` and `replays/` from its
+working directory: `make run` opens the app with `--working-dir` set to this
+folder, and its output goes to the terminal. Quit with Cmd+Q: Ctrl+C stops
+`make`, not the game. It builds as an app bundle, `build/circles.app`,
+which marks it as a game: macOS turns on Game Mode while it's full screen
+(F11), giving it priority on the CPU and GPU. Opened as an app, it's also
+circles, not the terminal, that macOS asks for permissions.
+
+macOS keeps a permission such as Input Monitoring only while the app's
+signature matches. The build signs ad hoc, which changes with every build;
+to keep permissions across builds, sign with a certificate:
+`cmake -B build -DCIRCLES_SIGN_IDENTITY="Apple Development"`.
 
 ## Frames and latency
 
@@ -40,25 +48,60 @@ the display depends on the window:
   buffer, and shows at the next refresh.
 
 The bottom-right corner shows, for example,
-`120 fps   1000 updates/s   display 7.8 ms   audio 19.4 ms   input 0.4 ms`:
+`120 fps   1000 updates/s   key to screen 11.8 ms   aim to screen 8.8 ms   key to sound 19.6 ms`:
 
 - **fps**: frames the display showed per second, as Metal reports them, in
   full screen. Windowed, macOS doesn't report what the compositor shows, so
   it reads **drawn/s**: frames drawn per second.
 - **updates/s**: game loop passes per second, each reading input, advancing
   the game and starting sounds.
-- **display**: from starting to draw a frame to the display showing it, the
-  median of the last 30 frames, as Metal reports it. Full screen only; `-`
-  windowed.
-- **audio**: from a sound being started to it leaving the speakers: the wait
-  for the audio's next cycle, half of one on average, and the output
-  device's delay as Core Audio reports it. Not measured per sound.
-- **input**: from a key or button press, as macOS stamped it, to the game
-  loop reading it, the median of the last 30 presses. A press read over
-  100 ms late, as while a map loads, is left out.
+- **key to screen**: from a key or button press, as macOS stamped it, to the
+  first frame drawn after the game read it being on screen.
+- **aim to screen**: from a cursor movement reaching macOS (its device's
+  report, once the driver stage below is known; until then, the movement's
+  own stamp) to the first frame drawn after it being on screen.
+- **key to sound**: from a press to its hitsound leaving the speakers: the
+  read, wait and output stages below, added up.
 
-What a press takes to show adds these up: input, then the wait for the next
-frame to start drawing, then display. Its hitsound takes input, then audio.
+F6 switches between that line, a table of each path's stages, and nothing
+(saved in `settings.txt`):
+
+```
+                driver  read  wait  output   total
+key to screen        -  0.52   3.1     8.0    11.8 ms
+aim to screen     0.08  0.12  0.48     8.0     8.8 ms
+key to sound         -  0.52  0.42    18.7    19.6 ms
+
+keyboard reports every 8.0 ms   aim every 0.99 ms
+120 fps   1000 updates/s
+```
+
+- **driver**: from a pointing device's report reaching macOS to the cursor
+  movement made from it. A mouse's movement is stamped with its report's
+  arrival, so about 0; a tablet driver such as OpenTabletDriver adds its
+  processing. It times the movement, not a smoothing filter's lag in
+  position. Reading device reports needs the Input Monitoring permission,
+  which the table asks for. Not measured for keys: `-`.
+- **read**: from macOS's stamp to the game loop reading the input.
+- **wait**: until the next frame starts drawing, or for sound, the audio's
+  next cycle starts. A moving cursor's newest movement is fresh when a frame
+  starts, so its wait is shorter than a press's.
+- **output**: from a frame starting to draw to the display showing it, as
+  Metal reports it; for sound, the output device's delay as Core Audio
+  reports it, not measured.
+- **total**: for the screen, measured from the input's stamp to the
+  display, plus the driver for aim; for sound, the stages added up.
+- **keyboard reports every**: the longest interval a connected keyboard
+  tells macOS it reports at (not measured). A press waits up to that long
+  before macOS sees it, which no total includes. **aim every**: the time
+  between cursor movements.
+
+Figures are medians of the last 30 samples, refreshed four times a second
+and shown to hundredths under 1 ms. A median of a whole path needn't equal
+its stages' medians added up. The screen's output and totals are full
+screen only (`-` windowed: macOS doesn't tell an app when its window's
+frame reaches the display), and an input read over 100 ms late, as while a
+map loads, is left out.
 
 To measure further: F8 records a profile to `perf/` (F8 again saves it)
 for `tools/perf_summary.py`. In full screen the profile also times each
@@ -127,6 +170,7 @@ with them. Hidden and Flashlight make S and SS grades silver.
 | F9 | Next skin (outside gameplay) |
 | F10 | Mouse buttons on or off for hitting, saved in `settings.txt` |
 | F11 | Full screen, as the window's green button enters it: the display keeps its resolution |
+| F6 | Latency readout: a line, a table of stages, or hidden; saved in `settings.txt` |
 | F1 | Mod select (song select) |
 
 In song select, type to search, use the arrow keys to choose, Enter to play

@@ -283,19 +283,47 @@ struct Backdrop {
   f64                changed = -1e9;  // wall seconds
 };
 
-// The corner readout's latencies, by stage: drawing a frame to the display
-// showing it, a sound started to the speakers, and a press to the game
-// reading it.
+// Recent samples of one latency, in ms, and their median.
+struct LatencyStat {
+  std::deque<f32> samples;
+  f32             ms = -1;  // the median; -1 until known
+};
+
+// The corner readout: latency from the hands to the eyes and ears, by stage
+// and end to end. Times are seconds of uptime, the clock macOS stamps input
+// events with.
 struct Readout {
-  std::vector<InputPress>   presses;         // being handled
-  std::vector<GpuFrameTime> reports;         // the GPU's, being handled
-  std::deque<f32>           display, input;  // recent samples, ms
-  i32                       shown = 0;       // frames since shown_rate was set
+  i32                       mode = 1;  // 0 hidden, 1 a line, 2 with stages
+  // The keyboards' slowest report interval, read at launch.
+  f64                       keyboard_interval_ms = 0;
+  // Being handled.
+  std::vector<InputTiming>  new_presses, new_moves;
+  std::vector<GpuFrameTime> reports;
+  std::vector<f64>          waits;
+  // Read, until a frame drawn after them is shown, and until a frame starts
+  // drawing after them.
+  std::deque<InputTiming>   presses, moves, waiting_presses, waiting_moves;
+  f64                       last_move = -1;  // event time
+  // keys
+  LatencyStat               key_read;
+  // aim: from a pointing device's report reaching macOS to its cursor
+  // movement (the driver), how often movements come, and reading them
+  PointerAccess             pointer_access = PointerAccess::Asked;
+  std::vector<f64>          new_reports;
+  std::deque<f64>           pointer_reports;  // when they arrived
+  std::deque<InputTiming>   driver_moves;     // for timing the driver
+  LatencyStat               driver, aim_interval, aim_read;
+  // screen: from reading a press, or the newest cursor movement, to the next
+  // frame starting to draw, and from drawing to being shown
+  LatencyStat               frame_wait, aim_wait, display;
+  // sound: from starting a sound to the audio cycle that mixes it
+  LatencyStat               mixer;
+  // End to end: a press, or the newest cursor movement, to the frame
+  // showing it.
+  LatencyStat               key_screen, aim_screen;
+  i32                       shown = 0;  // frames since shown_rate was set
   // Frames per second the display showed: only known full screen, else 0.
   i32                       shown_rate = 0;
-  f32                       display_ms = -1;  // -1 where not known
-  f32                       audio_ms = -1;
-  f32                       input_ms = -1;
 };
 
 // Not movable: Audio must stay put.

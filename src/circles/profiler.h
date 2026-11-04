@@ -78,15 +78,29 @@ void profile_frame_end(Profiler& profiler, u32 draw_calls, u32 vertices);
 // handled, or a negative value before any.
 f64 last_input_event_time();
 
-// A key or button going down, as macOS stamped it, and when circles read
-// it; both uptime seconds.
-struct InputPress {
+// An input event as macOS stamped it, and when circles read it; both uptime
+// seconds.
+struct InputTiming {
   f64 event_time;
   f64 received;
 };
-// Presses read since the last call: keys, modifiers included, and every
-// mouse button; not key repeats.
-void take_input_presses(std::vector<InputPress>& presses);
+// Since the last call: presses of keys, modifiers included, and every mouse
+// button, not key repeats; and cursor movements, from a mouse or tablet.
+void take_input_presses(std::vector<InputTiming>& presses);
+void take_input_moves(std::vector<InputTiming>& moves);
+
+// Raw reports from pointing devices (mice, trackpads, tablets) as they reach
+// macOS, before any driver turns them into cursor movement. Reading them
+// needs the Input Monitoring permission: listen_to_pointers asks for it the
+// first time, and listens once it's granted.
+enum class PointerAccess : u8 { Asked, Denied, Listening };
+PointerAccess listen_to_pointers();
+// When reports arrived since the last call, in uptime seconds.
+void          take_pointer_reports(std::vector<f64>& times);
+
+// The slowest report interval, in ms, that a connected keyboard tells macOS
+// it sends at; 0 if none says.
+f64 keyboard_report_interval();
 
 // Platform glue (profiler_macos.mm).
 void install_input_monitor(Profiler& profiler);

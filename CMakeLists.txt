@@ -64,7 +64,8 @@ target_compile_options(circles_core PRIVATE -Wall -Wextra)
 target_compile_options(circles_core PUBLIC -ffp-contract=off)
 target_link_libraries(circles_core PUBLIC
   circles_third_party PkgConfig::GLFW PkgConfig::LZMA "-framework AppKit"
-  "-framework Metal" "-framework QuartzCore" "-framework IOSurface")
+  "-framework Metal" "-framework QuartzCore" "-framework IOSurface"
+  "-framework IOKit")
 
 # An app bundle, so macOS knows circles is a game: Game Mode turns on while
 # it's full screen.
@@ -73,6 +74,14 @@ set_target_properties(circles PROPERTIES
   MACOSX_BUNDLE_INFO_PLIST ${PROJECT_SOURCE_DIR}/macos/Info.plist)
 target_compile_options(circles PRIVATE -Wall -Wextra)
 target_link_libraries(circles PRIVATE circles_core)
+# Permissions macOS grants the app, such as Input Monitoring, last while its
+# signature matches. An ad hoc signature changes with every build; a
+# certificate's, such as -DCIRCLES_SIGN_IDENTITY="Apple Development", doesn't.
+set(CIRCLES_SIGN_IDENTITY "-" CACHE STRING
+  "codesign identity for circles.app; - signs ad hoc")
+add_custom_command(TARGET circles POST_BUILD
+  COMMAND codesign --force --sign "${CIRCLES_SIGN_IDENTITY}"
+    "$<TARGET_BUNDLE_DIR:circles>")
 
 if(BUILD_TESTING)
   set(_tests rules archive skin hitsounds md5 replay stretch mods hit_objects
