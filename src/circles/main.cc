@@ -5,7 +5,6 @@
 #include <cstring>
 #include <memory>
 #include <string>
-#include <thread>
 
 namespace {
 
@@ -16,14 +15,13 @@ circles::App& app_of(GLFWwindow* window) {
 // For measuring: `--benchmark <replay.osr>` watches a replay silently while
 // profiling and exits at its results, saving the profile to perf/; given a
 // .osu, it watches Auto play the map.
-// `--size WxH` sets the window, `--uncapped` lifts the frame cap and
-// `--vsync` waits for the display.
+// `--size WxH` sets the window, and `--uncapped` lifts the cap on game loop
+// passes.
 struct Options {
   std::string benchmark;
   int         width = 0;
   int         height = 0;
   bool        uncapped = false;
-  bool        vsync = false;
 };
 
 bool parse_options(int argc, char** argv, Options& options) {
@@ -37,13 +35,10 @@ bool parse_options(int argc, char** argv, Options& options) {
       continue;
     else if (!std::strcmp(argv[i], "--uncapped"))
       options.uncapped = true;
-    else if (!std::strcmp(argv[i], "--vsync"))
-      options.vsync = true;
     else {
-      std::fprintf(
-          stderr,
-          "usage: circles [--benchmark replay.osr|map.osu] [--size WxH] "
-          "[--uncapped] [--vsync]\n");
+      std::fprintf(stderr,
+                   "usage: circles [--benchmark replay.osr|map.osu] [--size "
+                   "WxH] [--uncapped]\n");
       return false;
     }
   }
@@ -86,8 +81,6 @@ int main(int argc, char** argv) {
   });
   if (options.width > 0 && options.height > 0)
     glfwSetWindowSize(window, options.width, options.height);
-  app->vsync = options.vsync;
-  glfwSwapInterval(app->vsync ? 1 : 0);
   if (!options.benchmark.empty() &&
       !circles::app_start_benchmark(*app, options.benchmark)) {
     std::fprintf(stderr, "can't benchmark %s: no such replay or map\n",
@@ -96,13 +89,16 @@ int main(int argc, char** argv) {
     return 1;
   }
 
-  // Frames run up to 1000 per second, sleeping between them rather than
-  // spinning a core, unless the cap is turned off in settings (or for a
-  // benchmark, --uncapped). Presses are judged by their own timestamps, so
-  // the frame rate doesn't limit their precision.
+  // The game loop runs up to 1000 times per second, sleeping between passes
+  // rather than spinning a core, unless the cap is turned off in settings
+  // (or for a benchmark, --uncapped). Each pass handles input and advances
+  // the game; it draws when gpu_frame_due says, and in full screen the loop
+  // wakes early when the display frees a buffer. Presses are judged by their
+  // own timestamps, so the loop's rate doesn't limit their precision.
   if (options.uncapped)
     app->frame_cap = false;
-  auto  next_frame = std::chrono::steady_clock::now();
+  using Clock = std::chrono::steady_clock;
+  auto  next_update = Clock::now();
   auto& profiler = app->profiler;
   using circles::FramePhase;
   while (!glfwWindowShouldClose(window) && !app->quit) {
@@ -110,18 +106,18 @@ int main(int argc, char** argv) {
                                  static_cast<circles::u8>(app->screen));
     glfwPollEvents();
     circles::profile_phase(profiler, FramePhase::Poll);
-    circles::app_frame(*app, glfwGetTime());
-    glfwSwapBuffers(window);
-    circles::profile_phase(profiler, FramePhase::Swap);
-    next_frame += std::chrono::microseconds(app->frame_cap ? 1000 : 0);
-    const auto now = std::chrono::steady_clock::now();
-    if (next_frame < now)
-      next_frame = now;
+    circles::app_update(*app, glfwGetTime());
+    circles::profile_phase(profiler, FramePhase::Update);
+    const bool draw = circles::gpu_frame_due() && circles::app_draw(*app);
+    next_update += std::chrono::microseconds(app->frame_cap ? 1000 : 0);
+    const auto now = Clock::now();
+    if (next_update > now)
+      circles::gpu_sleep_until(next_update);
     else
-      std::this_thread::sleep_until(next_frame);
+      next_update = now;
     circles::profile_phase(profiler, FramePhase::Sleep);
-    circles::profile_frame_end(profiler, app->renderer.draw_calls,
-                               app->renderer.vertices_drawn);
+    circles::profile_frame_end(profiler, draw ? app->renderer.draw_calls : 0,
+                               draw ? app->renderer.vertices_drawn : 0);
     if (!options.benchmark.empty() && app->screen == circles::Screen::Results) {
       const std::string path = circles::app_finish_benchmark(*app);
       std::printf("profile: %s\n", path.empty()

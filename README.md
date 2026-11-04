@@ -1,6 +1,6 @@
 # circles
 
-An osu!-style rhythm game in C++20 and OpenGL that plays real osu!standard
+An osu!-style rhythm game in C++20 and Metal that plays real osu!standard
 beatmaps, parsed with
 [fosu](https://github.com/cmyui/fast-osu-beatmap-parser).
 
@@ -12,8 +12,8 @@ the same judgements.
 
 ## Build and run
 
-macOS only: rendering uses Apple's OpenGL 4.1 headers. Needs CMake, GLFW and
-xz, for replays' LZMA compression (`brew install cmake glfw xz`).
+macOS only: rendering uses Metal. Needs CMake, GLFW and xz, for replays'
+LZMA compression (`brew install cmake glfw xz`).
 
 ```sh
 make run     # build into build/ and start the game
@@ -25,6 +25,24 @@ The game reads `shaders/`, `beatmaps/`, `skins/` and `replays/` from the
 working directory, so run it from this folder. It builds as an app bundle,
 `build/circles.app`, which marks it as a game: macOS turns on Game Mode while
 it's full screen (F11), giving it priority on the CPU and GPU.
+
+## Frames and latency
+
+The game loop runs up to 1000 times a second (the cap can be lifted in
+settings, Ctrl+O). Each pass reads input, advances the game and plays its
+sounds; presses are judged at the time macOS stamped them. How frames reach
+the display depends on the window:
+
+- Windowed, every pass draws a frame and hands it to macOS's window
+  compositor, which shows the newest at each display refresh.
+- Full screen (F11), frames skip the compositor and go straight to the
+  display, one per refresh: each is drawn as soon as the display frees a
+  buffer, and shows at the next refresh.
+
+To measure: F7 opens a latency test screen to film with a slow-motion camera,
+and F8 records a profile to `perf/` (F8 again saves it) for
+`tools/perf_summary.py`. In full screen the profile also times each frame
+from the start of its drawing to the display showing it.
 
 ## Beatmaps
 

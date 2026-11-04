@@ -286,7 +286,6 @@ struct Backdrop {
 // Not movable: Audio must stay put.
 struct App {
   Profiler                 profiler;
-  bool                     vsync = false;
   GLFWwindow*              window = nullptr;
   f32                      width = 0;  // window size in points
   f32                      height = 0;
@@ -327,8 +326,8 @@ struct App {
   bool                     mouse_buttons = true;
   // Gameplay's background dim, 0 to 1; 1 hides the background.
   f32                      background_dim = 0.8f;
-  // Frames sleep to run at most 1000 per second, rather than as fast as
-  // they can.
+  // The game loop sleeps to run at most 1000 passes per second, rather than
+  // as fast as it can.
   bool                     frame_cap = true;
   // The cursor's size, a multiple of the skin's, 0.1 to 2 as in osu!.
   f32                      cursor_size = 1;
@@ -350,8 +349,10 @@ struct App {
   f64                    cursor_moved = -1e9;  // wall seconds
   std::deque<TrailPoint> trail;
 
-  i32                    fps = 0;
+  i32                    fps = 0;          // frames drawn per second
+  i32                    update_rate = 0;  // game loop passes per second
   i32                    fps_frames = 0;
+  i32                    updates = 0;
   f64                    fps_window_start = 0;
   std::string            toast;
   f64                    toast_time = -1e9;
@@ -360,7 +361,11 @@ struct App {
 
 // app.cc
 bool app_init(App& app);
-void app_frame(App& app, f64 now);
+// A pass of the game loop: input handled, the game advanced. Every pass
+// updates; app_draw draws when gpu_frame_due says.
+void app_update(App& app, f64 now);
+// False if there was nothing to draw into yet.
+bool app_draw(App& app);
 void app_shutdown(App& app);
 void app_key(App& app, i32 key, i32 action);
 void app_char(App& app, u32 codepoint);

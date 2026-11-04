@@ -1,3 +1,4 @@
+#include <circles/gpu.h>
 #include <circles/profiler.h>
 
 #include <ctime>
@@ -12,8 +13,6 @@ f64 uptime() {
 }
 
 void profiler_init(Profiler& profiler) {
-  glGenQueries(Profiler::kQueries, profiler.queries.data());
-  profiler.query_frame.fill(-1);
   install_input_monitor(profiler);
 }
 
@@ -23,7 +22,6 @@ void profiler_start(Profiler& profiler, bool overlay) {
   profiler.started = uptime();
   profiler.frames.clear();
   profiler.inputs.clear();
-  profiler.query_frame.fill(-1);
   profiler.in_frame = false;
   // Every sample the devices send, not one per poll.
   set_mouse_coalescing(false);
@@ -31,28 +29,27 @@ void profiler_start(Profiler& profiler, bool overlay) {
 
 namespace {
 
-const char* const kPhaseNames[] = {"poll", "update", "draw", "swap", "sleep"};
+const char* const kPhaseNames[] = {"poll", "update", "draw", "present",
+                                   "sleep"};
 const char* const kInputKinds[] = {"key_down", "key_up", "button_down",
                                    "button_up", "move"};
 const char* const kInputDevices[] = {"keyboard", "mouse", "tablet"};
 
-// Collects finished GPU timings into their frames.
-void collect_gpu_times(Profiler& profiler, bool wait) {
-  for (i32 slot = 0; slot < Profiler::kQueries; ++slot) {
-    const i64 frame = profiler.query_frame[slot];
-    if (frame < 0)
+// Puts finished frames' GPU times into their records. The GPU's reports
+// are taken while not profiling too, so they don't pile up.
+void collect_gpu_times(Profiler& profiler) {
+  static std::vector<GpuFrameTime> times;
+  times.clear();
+  gpu_take_frame_times(times);
+  for (const GpuFrameTime& t : times) {
+    if (!profiler.active || t.tag < 0 ||
+        t.tag >= static_cast<i64>(profiler.frames.size()))
       continue;
-    GLint available = 0;
-    if (!wait)
-      glGetQueryObjectiv(profiler.queries[slot], GL_QUERY_RESULT_AVAILABLE,
-                         &available);
-    if (!wait && !available)
-      continue;
-    GLuint64 elapsed = 0;
-    glGetQueryObjectui64v(profiler.queries[slot], GL_QUERY_RESULT, &elapsed);
-    if (frame < static_cast<i64>(profiler.frames.size()))
-      profiler.frames[frame].gpu_ms = static_cast<f32>(elapsed * 1e-6);
-    profiler.query_frame[slot] = -1;
+    FrameRecord& frame = profiler.frames[t.tag];
+    if (t.gpu_ms >= 0)
+      frame.gpu_ms = t.gpu_ms;
+    if (t.shown_ms >= 0)
+      frame.shown_ms = t.shown_ms;
   }
 }
 
@@ -61,7 +58,7 @@ void collect_gpu_times(Profiler& profiler, bool wait) {
 std::string profiler_stop(Profiler& profiler, const std::string& directory) {
   if (!profiler.active)
     return {};
-  collect_gpu_times(profiler, true);
+  collect_gpu_times(profiler);
   profiler.active = false;
   set_mouse_coalescing(true);
   std::error_code error;
@@ -78,14 +75,15 @@ std::string profiler_stop(Profiler& profiler, const std::string& directory) {
   frames << "frame,start_ms";
   for (const char* name : kPhaseNames)
     frames << ',' << name << "_ms";
-  frames << ",gpu_ms,draw_calls,vertices,inputs,screen\n";
+  frames << ",gpu_ms,shown_ms,draw_calls,vertices,inputs,screen\n";
   for (size_t i = 0; i < profiler.frames.size(); ++i) {
     const FrameRecord& f = profiler.frames[i];
     frames << i << ',' << (f.start - origin) * 1000;
     for (f32 ms : f.phase_ms)
       frames << ',' << ms;
-    frames << ',' << f.gpu_ms << ',' << f.draw_calls << ',' << f.vertices << ','
-           << f.inputs << ',' << static_cast<i32>(f.screen) << '\n';
+    frames << ',' << f.gpu_ms << ',' << f.shown_ms << ',' << f.draw_calls << ','
+           << f.vertices << ',' << f.inputs << ',' << static_cast<i32>(f.screen)
+           << '\n';
   }
   std::ofstream inputs(base.string() + "-input.csv");
   inputs << "event_ms,received_ms,frame,kind,device\n";
@@ -98,6 +96,7 @@ std::string profiler_stop(Profiler& profiler, const std::string& directory) {
 }
 
 void profile_frame_begin(Profiler& profiler, u8 screen) {
+  collect_gpu_times(profiler);
   if (!profiler.active)
     return;
   const f64 now = uptime();
@@ -117,26 +116,10 @@ void profile_phase(Profiler& profiler, FramePhase phase) {
   profiler.phase_start = now;
 }
 
-void profile_gpu_begin(Profiler& profiler) {
-  if (!profiler.active || !profiler.in_frame ||
-      profiler.frames.size() % Profiler::kGpuSampleEvery)
-    return;
-  collect_gpu_times(profiler, false);
-  const i32 slot = profiler.next_query;
-  // A query still in flight a whole ring later is waited for.
-  if (profiler.query_frame[slot] >= 0)
-    collect_gpu_times(profiler, true);
-  glBeginQuery(GL_TIME_ELAPSED, profiler.queries[slot]);
-  profiler.query_frame[slot] = static_cast<i64>(profiler.frames.size());
-  profiler.gpu_timing = true;
-}
-
-void profile_gpu_end(Profiler& profiler) {
-  if (!profiler.gpu_timing)
-    return;
-  glEndQuery(GL_TIME_ELAPSED);
-  profiler.gpu_timing = false;
-  profiler.next_query = (profiler.next_query + 1) % Profiler::kQueries;
+i64 profile_frame_tag(const Profiler& profiler) {
+  return profiler.active && profiler.in_frame
+             ? static_cast<i64>(profiler.frames.size())
+             : -1;
 }
 
 void profile_frame_end(Profiler& profiler, u32 draw_calls, u32 vertices) {

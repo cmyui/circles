@@ -243,39 +243,22 @@ BodySquash body_squash(const BodyShape&        shape,
 }
 
 BodyTarget create_target(i32 width, i32 height) {
-  BodyTarget target{.width = width, .height = height};
-  glGenTextures(1, &target.colour);
-  glBindTexture(GL_TEXTURE_2D, target.colour);
-  glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_RGBA,
-               GL_UNSIGNED_BYTE, nullptr);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-  glGenRenderbuffers(1, &target.depth);
-  glBindRenderbuffer(GL_RENDERBUFFER, target.depth);
-  glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT16, width, height);
-  glGenFramebuffers(1, &target.framebuffer);
-  glBindFramebuffer(GL_FRAMEBUFFER, target.framebuffer);
-  glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
-                         target.colour, 0);
-  glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
-                            GL_RENDERBUFFER, target.depth);
-  return target;
+  return {.colour = gpu_create_texture(width, height, TextureFormat::Rgba8,
+                                       nullptr, false, true),
+          .depth = gpu_create_texture(width, height, TextureFormat::Depth16,
+                                      nullptr, false, true),
+          .width = width,
+          .height = height};
 }
 
 void destroy_target(BodyTarget& target) {
-  glDeleteFramebuffers(1, &target.framebuffer);
-  glDeleteRenderbuffers(1, &target.depth);
-  glDeleteTextures(1, &target.colour);
+  gpu_release_texture(target.colour);
+  gpu_release_texture(target.depth);
   target = {};
 }
 
 void clear_target(const BodyTarget& target) {
-  glBindFramebuffer(GL_FRAMEBUFFER, target.framebuffer);
-  glClearColor(0, 0, 0, 0);
-  glClearDepth(1);
-  glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+  gpu_clear_target(target.colour, target.depth);
 }
 
 struct Rgba {
@@ -292,10 +275,10 @@ Rgba to_rgba(Color c) {
 // MmSliderRendererGL's 128x1 texture: from the edge (0) to the centre (1), a
 // faint shadow, the border, then the colour darkened to lightened, rendered
 // as a line strip and so interpolated linearly between its stops.
-GLuint body_gradient(SliderBodyRenderer& s,
-                     Rgba                colour,
-                     Rgba                border,
-                     f32                 radius) {
+GpuTexture* body_gradient(SliderBodyRenderer& s,
+                          Rgba                colour,
+                          Rgba                border,
+                          f32                 radius) {
   const f32 aa = std::min(std::max(0.5f / radius, 0.01171875f), 0.0625f);
   std::array<u8, 12> key{colour.r, colour.g, colour.b, border.r,
                          border.g, border.b, border.a};
@@ -342,50 +325,29 @@ GLuint body_gradient(SliderBodyRenderer& s,
     texels[i * 4 + 2] = mix(a.c.b, b.c.b);
     texels[i * 4 + 3] = mix(a.c.a, b.c.a);
   }
-  GLuint texture;
-  glGenTextures(1, &texture);
-  glBindTexture(GL_TEXTURE_2D, texture);
-  glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 128, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE,
-               texels.data());
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+  GpuTexture* texture = gpu_create_texture(128, 1, TextureFormat::Rgba8,
+                                           texels.data(), false, false);
   s.gradients.push_back({key, texture});
   return texture;
 }
 
-// Draws `pieces` into the target's lower-left area of `width` by `height`
-// pixels, which shows the framebuffer from (x, y).
-void draw_pieces(App&             app,
-                 GLuint           framebuffer,
-                 i32              x,
-                 i32              y,
-                 i32              width,
-                 i32              height,
-                 const BodyCache& cache) {
+// Draws the batched pieces into `target`, which shows the framebuffer from
+// the cache's place in it.
+void draw_pieces(App& app, const BodyTarget& target, const BodyCache& cache) {
   auto& s = app.slider_bodies;
   if (s.batch.empty())
     return;
-  glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
-  glViewport(0, 0, width, height);
-  glUseProgram(s.program);
-  glUniform1f(s.radius, cache.radius);
-  glUniform4f(s.region, static_cast<f32>(x), static_cast<f32>(y),
-              static_cast<f32>(width), static_cast<f32>(height));
-  glUniform4f(s.squash, cache.squash.origin.x, cache.squash.origin.y,
-              cache.squash.scale.x, cache.squash.scale.y);
-  glActiveTexture(GL_TEXTURE0);
-  glBindTexture(GL_TEXTURE_2D, cache.gradient);
-  glBindVertexArray(s.vao);
-  glBindBuffer(GL_ARRAY_BUFFER, s.instances);
-  glBufferData(GL_ARRAY_BUFFER, s.batch.size() * sizeof(PieceInstance),
-               s.batch.data(), GL_STREAM_DRAW);
-  glDisable(GL_BLEND);
-  glEnable(GL_DEPTH_TEST);
-  glDepthFunc(GL_LEQUAL);
-  const auto count = static_cast<GLsizei>(s.batch.size());
-  glDrawArraysInstanced(GL_TRIANGLES, 0, kPieceVertices, count);
+  const PieceUniforms uniforms{
+      .region = {static_cast<f32>(cache.x), static_cast<f32>(cache.y),
+                 static_cast<f32>(target.width),
+                 static_cast<f32>(target.height)},
+      .squash = {cache.squash.origin.x, cache.squash.origin.y,
+                 cache.squash.scale.x, cache.squash.scale.y},
+      .radius = cache.radius};
+  const auto count = static_cast<u32>(s.batch.size());
+  gpu_draw_pieces(target.colour, target.depth, s.batch.data(), count,
+                  sizeof(PieceInstance), kPieceVertices, uniforms, s.rim.data(),
+                  cache.gradient);
   ++app.renderer.draw_calls;
   app.renderer.vertices_drawn += kPieceVertices * count;
   s.batch.clear();
@@ -395,13 +357,8 @@ void draw_pieces(App&             app,
 
 SliderBodyRenderer create_slider_body_renderer() {
   SliderBodyRenderer s;
-  s.program =
-      load_program("shaders/slider_body.vert", "shaders/slider_body.frag");
-  s.radius = glGetUniformLocation(s.program, "u_radius");
-  s.region = glGetUniformLocation(s.program, "u_region");
-  s.squash = glGetUniformLocation(s.program, "u_squash");
   // CalculateCapMesh's half circle.
-  std::array<f32, 2 * (kCapTriangles + 1)> rim{};
+  auto&              rim = s.rim;
   rim[1] = -1;
   for (i32 i = 1; i < kCapTriangles; ++i) {
     const f32 angle = static_cast<f32>(i) * (3.1415927f / 24.0f);
@@ -409,46 +366,8 @@ SliderBodyRenderer create_slider_body_renderer() {
     rim[2 * i + 1] = -static_cast<f32>(std::cos(static_cast<f64>(angle)));
   }
   rim[2 * kCapTriangles + 1] = 1;
-  glUseProgram(s.program);
-  glUniform2fv(glGetUniformLocation(s.program, "u_rim"), kCapTriangles + 1,
-               rim.data());
-  glUniform1i(glGetUniformLocation(s.program, "u_gradient"), 0);
-
-  glGenVertexArrays(1, &s.vao);
-  glBindVertexArray(s.vao);
-  glGenBuffers(1, &s.instances);
-  glBindBuffer(GL_ARRAY_BUFFER, s.instances);
-  constexpr GLsizei kStride = sizeof(PieceInstance);
-  glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, kStride,
-                        reinterpret_cast<void*>(offsetof(PieceInstance, p1)));
-  glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, kStride,
-                        reinterpret_cast<void*>(offsetof(PieceInstance, p2)));
-  glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, kStride,
-                        reinterpret_cast<void*>(offsetof(PieceInstance, cos)));
-  glVertexAttribIPointer(
-      3, 4, GL_UNSIGNED_BYTE, kStride,
-      reinterpret_cast<void*>(offsetof(PieceInstance, end_cap)));
-  for (GLuint i = 0; i < 4; ++i) {
-    glEnableVertexAttribArray(i);
-    glVertexAttribDivisor(i, 1);
-  }
   return s;
 }
-
-namespace {
-
-// Puts back the GL state the batched drawing expects.
-struct ScreenRestorer {
-  const App& app;
-  ~ScreenRestorer() {
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
-    glViewport(0, 0, app.pixel_width, app.pixel_height);
-    glEnable(GL_BLEND);
-    glDisable(GL_DEPTH_TEST);
-  }
-};
-
-}  // namespace
 
 void draw_slider_body(App&   app,
                       size_t index,
@@ -469,7 +388,7 @@ void draw_slider_body(App&   app,
                                  {origin.x * pixels, origin.y * pixels}};
   const f32              radius = static_cast<f32>(game.radius) * display.ratio;
   const auto&            skin = app.skin.config;
-  const GLuint           gradient =
+  GpuTexture*            gradient =
       body_gradient(s, to_rgba(skin.slider_track.value_or(colour)),
                     to_rgba(skin.slider_border.value_or(kWhite)), radius);
 
@@ -482,14 +401,13 @@ void draw_slider_body(App&   app,
     cache = game.bodies.caches.end() - 1;
   }
   cache->used = true;
-  flush(app.renderer);
-  ScreenRestorer restore{app};
 
   // A new place on screen: a new texture, over the body's area.
   if (!(cache->display == display) || cache->radius != radius ||
       cache->screen_width != app.pixel_width ||
       cache->screen_height != app.pixel_height) {
     destroy_target(cache->target);
+    destroy_target(cache->snaking);
     cache->display = display;
     cache->radius = radius;
     cache->screen_width = app.pixel_width;
@@ -521,7 +439,7 @@ void draw_slider_body(App&   app,
     }
   }
   const BodyTarget& target = cache->target;
-  if (!target.framebuffer)
+  if (!target.colour)
     return;  // off screen
 
   const SnakeState state = snake_state(shape, snake);
@@ -542,27 +460,22 @@ void draw_slider_body(App&   app,
   }
   const size_t settled = state.settled();
   add_instances(s.batch, shape, state, cache->settled, settled, display);
-  draw_pieces(app, target.framebuffer, cache->x, cache->y, target.width,
-              target.height, *cache);
+  draw_pieces(app, target, *cache);
   cache->settled = settled;
 
-  // The snaking end changes every frame: drawn over a copy of the rest.
+  // The snaking end changes every frame: drawn over a copy of the rest,
+  // which the screen's drawing reads after every body's pieces are drawn.
   const BodyTarget* shown = &target;
-  if (!state.done) {
-    if (s.scratch.width < app.pixel_width ||
-        s.scratch.height < app.pixel_height) {
-      destroy_target(s.scratch);
-      s.scratch = create_target(app.pixel_width, app.pixel_height);
-    }
-    glBindFramebuffer(GL_READ_FRAMEBUFFER, target.framebuffer);
-    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, s.scratch.framebuffer);
-    glBlitFramebuffer(0, 0, target.width, target.height, 0, 0, target.width,
-                      target.height, GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT,
-                      GL_NEAREST);
+  if (state.done) {
+    destroy_target(cache->snaking);
+  } else {
+    if (!cache->snaking.colour)
+      cache->snaking = create_target(target.width, target.height);
+    gpu_copy_target(target.colour, target.depth, cache->snaking.colour,
+                    cache->snaking.depth);
     add_instances(s.batch, shape, state, settled, state.count(), display);
-    draw_pieces(app, s.scratch.framebuffer, cache->x, cache->y, target.width,
-                target.height, *cache);
-    shown = &s.scratch;
+    draw_pieces(app, cache->snaking, *cache);
+    shown = &cache->snaking;
   }
 
   draw_image_region(
@@ -572,16 +485,15 @@ void draw_slider_body(App&   app,
       target.width / pixels, target.height / pixels, 0, 0,
       static_cast<f32>(target.width) / shown->width,
       static_cast<f32>(target.height) / shown->height, fade(kWhite, alpha));
-  // The scratch is reused by the next snaking body.
-  if (shown == &s.scratch)
-    flush(app.renderer);
 }
 
 void sweep_slider_bodies(App& app) {
   auto& caches = app.game.bodies.caches;
   for (auto& cache : caches)
-    if (!cache.used)
+    if (!cache.used) {
       destroy_target(cache.target);
+      destroy_target(cache.snaking);
+    }
   std::erase_if(caches, [](const BodyCache& c) {
     return !c.used;
   });
@@ -590,8 +502,10 @@ void sweep_slider_bodies(App& app) {
 }
 
 void release_slider_bodies(SliderBodies& bodies) {
-  for (auto& cache : bodies.caches)
+  for (auto& cache : bodies.caches) {
     destroy_target(cache.target);
+    destroy_target(cache.snaking);
+  }
   bodies.caches.clear();
 }
 
