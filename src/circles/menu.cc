@@ -82,11 +82,13 @@ void play_random_song(App& app) {
   play_preview(app);
 }
 
-// The beat being heard, so it allows for the audio offset.
+// The beat being heard, so it allows for the audio offset and the output's
+// delay.
 Beat current_beat(const App& app) {
   if (app.selected_map >= 0 && app.audio.music_loaded)
     return beat_at(app.library.maps[app.selected_map].beats,
-                   music_position(app.audio) - app.audio_offset);
+                   music_position(app.audio) - app.audio_offset -
+                       app.audio.output_latency);
   return beat_at({}, app.now * 1000);
 }
 
@@ -215,10 +217,11 @@ void menu_draw(App& app) {
                 std::to_string(app.library.sets.size()) + " sets";
   draw_text_shadowed(r, app.regular, footer, 20, app.height - 20, 15,
                      fade(kWhite, 0.8f));
-  char offset[96];
+  char offset[128];
   snprintf(offset, sizeof(offset),
-           "Audio offset %+.0f ms   (- / =, Shift for bigger steps)",
-           app.audio_offset);
+           "Audio offset %+.0f ms, plus %.0f ms output delay   (- / =, Shift "
+           "for bigger steps)",
+           app.audio_offset, app.audio.output_latency);
   draw_text_shadowed(r, app.regular, offset, 20, app.height - 42, 13,
                      fade(kWhite, 0.6f));
 }
