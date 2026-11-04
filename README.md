@@ -48,7 +48,7 @@ The bottom-right corner shows, for example,
 - **updates/s**: game loop passes per second, each reading input, advancing
   the game and starting sounds.
 - **display**: from starting to draw a frame to the display showing it, the
-  median of the last 120 frames, as Metal reports it. Full screen only; `-`
+  median of the last 30 frames, as Metal reports it. Full screen only; `-`
   windowed.
 - **audio**: from a sound being started to it leaving the speakers: the wait
   for the audio's next cycle, half of one on average, and the output

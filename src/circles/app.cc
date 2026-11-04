@@ -428,16 +428,15 @@ void import_dropped(App& app) {
     select_enter(app);
 }
 
-// How many recent frames and presses the readout's medians cover.
-constexpr size_t kDisplaySamples = 120;
-constexpr size_t kInputSamples = 30;
+// How many recent frames, and presses, the readout's medians cover.
+constexpr size_t kReadoutSamples = 30;
 // A press read this long after it happened met a stalled game loop, as
 // while a map loads: it says nothing about the usual delay.
 constexpr f64    kStall = 0.1;
 
-void add_sample(std::deque<f32>& samples, size_t keep, f64 seconds) {
+void add_sample(std::deque<f32>& samples, f64 seconds) {
   samples.push_back(static_cast<f32>(seconds * 1000));
-  if (samples.size() > keep)
+  if (samples.size() > kReadoutSamples)
     samples.pop_front();
 }
 
@@ -458,14 +457,14 @@ void take_samples(App& app) {
   for (const GpuFrameTime& report : readout.reports)
     if (report.shown >= 0) {
       ++readout.shown;
-      add_sample(readout.display, kDisplaySamples, report.shown - report.drawn);
+      add_sample(readout.display, report.shown - report.drawn);
     }
   readout.presses.clear();
   take_input_presses(readout.presses);
   for (const InputPress& press : readout.presses) {
     const f64 waited = press.received - press.event_time;
     if (waited <= kStall)
-      add_sample(readout.input, kInputSamples, waited);
+      add_sample(readout.input, waited);
   }
 }
 
@@ -591,7 +590,7 @@ void app_update(App& app, f64 now) {
 
   ++app.updates;
   take_samples(app);
-  if (now - app.fps_window_start >= 0.5) {
+  if (now - app.fps_window_start >= 0.25) {
     const f64 span = now - app.fps_window_start;
     app.fps = static_cast<i32>(std::lround(app.fps_frames / span));
     app.update_rate = static_cast<i32>(std::lround(app.updates / span));
