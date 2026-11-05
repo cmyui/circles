@@ -19,6 +19,14 @@ enum class ReportFormat : u8 {
   // at bytes 2 and 4 and pressure at 6, little-endian. Setting feature
   // report 2 to 2 turns it on.
   WacomIntuos,
+  // As OpenTabletDriver's IntuosPro parser reads it (its IntuosV1 tool
+  // reports): report 2 or 16; the pen out of range when byte 1 is 0x80, a
+  // position when bit 5 of byte 1 is set: 17 bits each, big-endian at bytes
+  // 2 and 4, shifted left with a bit of byte 9 below; pressure in 11 bits,
+  // byte 6 over the top two bits of byte 7 over byte 1's lowest. Reports of
+  // a pen's rotation (bits 1 and 3 of byte 1), which carry no pressure, are
+  // left out. Setting feature report 2 to 2 turns it on.
+  WacomIntuosPro,
 };
 
 // A feature report that turns a format's pen reports on: its ID and value.
@@ -53,6 +61,17 @@ inline constexpr TabletModel kTablets[] = {
      .max_x = 15200,
      .max_y = 9500,
      .max_pressure = 2047},
+    {.name = "Intuos5 touch S (PTH-450)",
+     .driver_name = "Wacom PTH-450",
+     .vendor = 0x056A,
+     .product = 0x0026,
+     .report_size = 10,
+     .format = ReportFormat::WacomIntuosPro,
+     .width = 157.48f,
+     .height = 98.425f,
+     .max_x = 31496,
+     .max_y = 19685,
+     .max_pressure = 2047},
 };
 // The model a device is, by its USB IDs and report size; null for none.
 const TabletModel* find_tablet(u16 vendor, u16 product, u32 report_size);
@@ -76,6 +95,7 @@ struct TabletArea {
   f32 x = kTablets[0].width / 2, y = kTablets[0].height / 2;
   f32 width = kTablets[0].width, height = kTablets[0].height;
   f32 rotation = 0;
+  bool operator==(const TabletArea&) const = default;
 };
 
 // From mm on the tablet to a position across the area, 0 to 1 each way:
@@ -84,27 +104,35 @@ struct TabletMapping {
   f32 m11 = 1, m12 = 0, m21 = 0, m22 = 1, m31 = 0, m32 = 0;
 };
 TabletMapping tablet_mapping(const TabletArea& area);
+// The area, kept on `model`'s surface: shrunk, keeping its shape, if its
+// turned bounds don't fit, then moved within it.
+TabletArea fit_area(TabletArea area, const TabletModel& model);
 // Where the pen is across the area, clamped to it.
 Vec2 map_pen(const TabletMapping& mapping, f32 x, f32 y);
 
 // Platform glue (tablet_macos.mm).
 
-// The tablet connected, as the pointer listener found it; null for none.
+// Of the supported tablets connected, the one connected last, whose surface
+// the area lies on; null for none.
 const TabletModel* connected_tablet();
 // OpenTabletDriver's area and tip threshold (percent) for the connected
 // tablet, or while none is, any it knows; false if it has none. Its display
 // area is taken to be the whole screen.
 bool import_tablet_area(TabletArea& area, f32& tip_threshold);
-// While on, keeps the connected tablet sending pen reports, turning them on
-// as its format says; turned off, and at quit, it gets back the mode it
-// had. Reports arrive through the pointer listener (listen_to_pointers).
+// While on, keeps every supported tablet connected sending pen reports,
+// turning them on as its format says, and reads them all; turned off, and
+// at quit, each gets back the mode it had. Reports arrive through the
+// pointer listener (listen_to_pointers).
 void read_tablet(bool on);
 // Pen reports since the last call, while reading the tablet.
 void take_pen_reports(std::vector<PenReport>& reports);
-// For the pointer listener: whether a device just connected is a tablet's
-// pen interface, which is then read; its reports; and devices leaving.
-bool tablet_device(void* device);
-void tablet_report(std::span<const u8> report, f64 arrived);
-void tablet_removed(void* device);
+// For the pointer listener: which tablet a device just connected is, if
+// it's a supported tablet's pen interface; a report from one; and devices
+// leaving.
+const TabletModel* tablet_device(void* device);
+void               tablet_report(const TabletModel& model,
+                                 std::span<const u8> report,
+                                 f64                 arrived);
+void               tablet_removed(void* device);
 
 }  // namespace circles

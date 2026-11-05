@@ -81,9 +81,11 @@ void area_changed(App& app) {
 }
 
 void import_area(App& app) {
+  const TabletModel* tablet = connected_tablet();
   show_toast(app, import_tablet_settings(app)
-                      ? "Imported OpenTabletDriver's area"
-                      : "OpenTabletDriver has no area for the CTL-472");
+                      ? std::string("Imported OpenTabletDriver's area")
+                      : std::string("OpenTabletDriver has no area for ") +
+                            (tablet ? tablet->name : "a supported tablet"));
 }
 
 constexpr RowSpec kRows[kRowCount] = {

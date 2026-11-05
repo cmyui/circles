@@ -503,12 +503,31 @@ void set_cursor(App& app, f64 x, f64 y) {
   settings_cursor(app);
 }
 
+// Keeps the area on a newly connected tablet's surface, saying so when it
+// had to move or shrink it.
+void fit_tablet_area(App& app, const TabletModel& tablet) {
+  const TabletArea area{app.tablet_x, app.tablet_y, app.tablet_width,
+                        app.tablet_height, app.tablet_rotation};
+  const TabletArea fitted = fit_area(area, tablet);
+  if (fitted == area)
+    return;
+  set_tablet_area(app, fitted);
+  show_toast(app, std::string("Pen: the area went past the ") + tablet.name +
+                      "'s surface, so it was fitted onto it");
+}
+
 // Aims and clicks with the pen's reports since the last pass, each at its
 // own time. The tip is the left button, as OpenTabletDriver binds it.
 void read_pen(App& app) {
   auto& pen = app.pen;
   if (!app.pen_direct)
     return;
+  const TabletModel* tablet = connected_tablet();
+  if (tablet != pen.tablet) {
+    pen.tablet = tablet;
+    if (tablet)
+      fit_tablet_area(app, *tablet);
+  }
   pen.reports.clear();
   take_pen_reports(pen.reports);
   if (pen.reports.empty())

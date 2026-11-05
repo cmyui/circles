@@ -402,6 +402,7 @@ struct App {
     std::vector<PenReport> reports;  // being handled
     bool                   in_range = false, tip = false;
     f64                    last = -1;  // when its last report arrived
+    const TabletModel*     tablet = nullptr;  // the area was last fitted to
   } pen;
   struct SettingsMenu {
     bool open = false;
@@ -569,9 +570,11 @@ void gameplay_key(App& app, i32 key, i32 action, f64 wall);
 void gameplay_click(App& app, i32 button, i32 action, f64 wall);
 void gameplay_focus_lost(App& app);
 
-// The pen read directly or through its driver; its area changed; and
-// OpenTabletDriver's area and tip threshold imported, false if it has none.
+// The pen read directly or through its driver; its area set, or changed;
+// and OpenTabletDriver's area and tip threshold imported, false if it has
+// none.
 void set_pen_direct(App& app, bool on);
+void set_tablet_area(App& app, const TabletArea& area);
 void update_tablet_mapping(App& app);
 bool import_tablet_settings(App& app);
 

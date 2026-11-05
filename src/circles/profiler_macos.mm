@@ -37,8 +37,8 @@ struct PointerListener {
 };
 PointerListener* pointers = nullptr;
 
-// Each report's arrival, for timing the driver; the tablet's (`tablet` set)
-// also go to be read.
+// Each report's arrival, for timing the driver; a tablet's (`tablet`, its
+// model) also go to be read.
 void on_pointer_report(void* tablet,
                        IOReturn,
                        void*,
@@ -53,7 +53,8 @@ void on_pointer_report(void* tablet,
     pointers->times.push_back(arrived);
   }
   if (tablet)
-    tablet_report({report, static_cast<size_t>(length)}, arrived);
+    tablet_report(*static_cast<const TabletModel*>(tablet),
+                  {report, static_cast<size_t>(length)}, arrived);
 }
 
 // Each device as it's matched, those present at the start included: its
@@ -65,9 +66,9 @@ void on_device_matched(void*, IOReturn, void*, IOHIDDeviceRef ref) {
     return;
   auto& buffer = pointers->buffers[ref];
   buffer.resize(size);
-  void* tablet = tablet_device(ref) ? ref : nullptr;
   IOHIDDeviceRegisterInputReportWithTimeStampCallback(
-      ref, buffer.data(), size, on_pointer_report, tablet);
+      ref, buffer.data(), size, on_pointer_report,
+      const_cast<TabletModel*>(tablet_device(ref)));
 }
 
 void on_device_removed(void*, IOReturn, void*, IOHIDDeviceRef ref) {

@@ -1,5 +1,5 @@
-// The connected tablet's reports, through the pointer listener
-// (profiler_macos.mm), and importing its area from OpenTabletDriver.
+// The connected tablets' reports, through the pointer listener
+// (profiler_macos.mm), and importing the area from OpenTabletDriver.
 #include <circles/tablet.h>
 
 #import <AppKit/AppKit.h>
@@ -14,44 +14,47 @@ namespace circles {
 
 namespace {
 
+// A supported tablet's pen interface, while it's connected.
+struct Tablet {
+  IOHIDDeviceRef     device;
+  const TabletModel* model;
+  i32                restore = -1;  // the mode it had, if we changed it
+};
+
 std::mutex             mutex;
-IOHIDDeviceRef         device = nullptr;  // the pen interface connected
-const TabletModel*     model = nullptr;   // which tablet it is
+std::vector<Tablet>    tablets;  // in the order they connected
 bool                   reading = false;
-i32                    restore = -1;  // the mode it had, if we changed it
 std::vector<PenReport> reports;
 f64                    last_arrived = -1;
 
-// Sets the connected tablet's mode, by the feature report its format names:
-// on, the value that turns pen reports on; off, back to the one it had.
-// Called with the mutex held.
-void switch_mode(bool pen) {
-  if (!device)
-    return;
-  const auto [id, value] = format_setup(model->format);
+// Sets a tablet's mode, by the feature report its format names: on, the
+// value that turns pen reports on; off, back to the one it had. Called with
+// the mutex held.
+void switch_mode(Tablet& tablet, bool pen) {
+  const auto [id, value] = format_setup(tablet.model->format);
   if (pen) {
     u8        mode[2] = {id, 0};
     CFIndex   length = sizeof(mode);
-    const i32 got = IOHIDDeviceGetReport(device, kIOHIDReportTypeFeature, id,
-                                         mode, &length);
+    const i32 got = IOHIDDeviceGetReport(
+        tablet.device, kIOHIDReportTypeFeature, id, mode, &length);
     if (got != kIOReturnSuccess) {
       std::fprintf(stderr, "tablet: can't read its mode (0x%x)\n", got);
       return;
     }
     if (mode[1] == value)
       return;
-    restore = mode[1];
+    tablet.restore = mode[1];
     const u8  pen_mode[2] = {id, value};
-    const i32 set = IOHIDDeviceSetReport(device, kIOHIDReportTypeFeature, id,
-                                         pen_mode, sizeof(pen_mode));
+    const i32 set = IOHIDDeviceSetReport(
+        tablet.device, kIOHIDReportTypeFeature, id, pen_mode, sizeof(pen_mode));
     if (set != kIOReturnSuccess)
       std::fprintf(stderr, "tablet: can't switch it to pen reports (0x%x)\n",
                    set);
-  } else if (restore >= 0) {
-    const u8 mode[2] = {id, static_cast<u8>(restore)};
-    IOHIDDeviceSetReport(device, kIOHIDReportTypeFeature, id, mode,
+  } else if (tablet.restore >= 0) {
+    const u8 mode[2] = {id, static_cast<u8>(tablet.restore)};
+    IOHIDDeviceSetReport(tablet.device, kIOHIDReportTypeFeature, id, mode,
                          sizeof(mode));
-    restore = -1;
+    tablet.restore = -1;
   }
 }
 
@@ -63,7 +66,7 @@ i32 int_property(IOHIDDeviceRef ref, CFStringRef key) {
 
 const TabletModel* connected_tablet() {
   std::lock_guard lock(mutex);
-  return model;
+  return tablets.empty() ? nullptr : tablets.back().model;
 }
 
 bool import_tablet_area(TabletArea& area, f32& tip_threshold) {
@@ -114,7 +117,8 @@ bool import_tablet_area(TabletArea& area, f32& tip_threshold) {
 void read_tablet(bool on) {
   std::lock_guard lock(mutex);
   reading = on;
-  switch_mode(on);
+  for (Tablet& tablet : tablets)
+    switch_mode(tablet, on);
   if (!on)
     reports.clear();
 }
@@ -125,38 +129,34 @@ void take_pen_reports(std::vector<PenReport>& out) {
   reports.clear();
 }
 
-bool tablet_device(void* ref) {
+const TabletModel* tablet_device(void* ref) {
   auto               hid = static_cast<IOHIDDeviceRef>(ref);
   const TabletModel* found = find_tablet(
       static_cast<u16>(int_property(hid, CFSTR(kIOHIDVendorIDKey))),
       static_cast<u16>(int_property(hid, CFSTR(kIOHIDProductIDKey))),
       static_cast<u32>(int_property(hid, CFSTR(kIOHIDMaxInputReportSizeKey))));
   if (!found)
-    return false;
+    return nullptr;
   std::lock_guard lock(mutex);
-  device = hid;
-  model = found;
-  restore = -1;
+  tablets.push_back({hid, found});
   if (reading)
-    switch_mode(true);
-  return true;
+    switch_mode(tablets.back(), true);
+  return found;
 }
 
 void tablet_removed(void* ref) {
   std::lock_guard lock(mutex);
-  if (device != ref)
-    return;
-  device = nullptr;
-  model = nullptr;
-  restore = -1;
+  std::erase_if(tablets, [&](const Tablet& t) { return t.device == ref; });
 }
 
-void tablet_report(std::span<const u8> report, f64 arrived) {
+void tablet_report(const TabletModel&  model,
+                   std::span<const u8> report,
+                   f64                 arrived) {
   std::lock_guard lock(mutex);
   PenReport       pen;
   // macOS can list the interface twice; each report counts once.
-  if (!reading || !model || arrived == last_arrived ||
-      !decode_pen_report(*model, report, arrived, pen))
+  if (!reading || arrived == last_arrived ||
+      !decode_pen_report(model, report, arrived, pen))
     return;
   last_arrived = arrived;
   reports.push_back(pen);
