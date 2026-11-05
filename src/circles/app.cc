@@ -917,9 +917,9 @@ void set_pen_direct(App& app, bool on) {
   // The aim's figures start over, each describing one way of reading it,
   // and movements the other way made aren't timed.
   auto& readout = app.readout;
-  for (LatencyStat* stat : {&readout.driver, &readout.aim_interval,
-                            &readout.aim_read, &readout.aim_wait,
-                            &readout.aim_screen})
+  for (LatencyStat* stat :
+       {&readout.driver, &readout.aim_interval, &readout.aim_read,
+        &readout.aim_wait, &readout.aim_screen})
     *stat = {};
   readout.moves.clear();
   readout.waiting_moves.clear();
@@ -930,12 +930,15 @@ void set_pen_direct(App& app, bool on) {
   }
   // The first time, the area OpenTabletDriver has.
   const bool imported = !app.tablet_area_set && import_tablet_settings(app);
+  const TabletModel* tablet = connected_tablet();
   if (listen_to_pointers() != PointerAccess::Listening)
     show_toast(app, "Pen: read by circles once Input Monitoring is allowed");
-  else if (imported)
-    show_toast(app, "Pen: read by circles, with OpenTabletDriver's area");
+  else if (!tablet)
+    show_toast(app,
+               "Pen: no supported tablet connected, so through its driver");
   else
-    show_toast(app, "Pen: read by circles");
+    show_toast(app, std::string("Pen: read by circles, ") + tablet->name +
+                        (imported ? ", with OpenTabletDriver's area" : ""));
 }
 
 void apply_frame_limiter(App& app) {

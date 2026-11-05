@@ -29,9 +29,10 @@ constexpr const char* kPageNames[kPageCount] = {"General", "Tablet"};
 struct RowSpec {
   const char* label;
   i32         page = kGeneral;
-  f32 App::*  number = nullptr;
-  f32         min = 0, max = 1;
-  f32         step = 0.05f;  // per arrow key
+  f32 App::* number = nullptr;
+  f32        min = 0, max = 1;
+  f32 (*max_of)() = nullptr;  // a maximum that depends, instead of max
+  f32         step = 0.05f;   // per arrow key
   const char* format = "%.2fx";
   bool App::* choice = nullptr;
   i32 App::*                   option = nullptr;  // an index into names
@@ -58,6 +59,17 @@ enum Row : i32 {
   kImportRow,
   kRowCount
 };
+
+// The area's limits: the connected tablet's surface, or while none is,
+// kTablets[0]'s.
+const TabletModel& surface_tablet() {
+  const TabletModel* connected = connected_tablet();
+  return connected ? *connected : kTablets[0];
+}
+
+f32 row_max(const RowSpec& spec) {
+  return spec.max_of ? spec.max_of() : spec.max;
+}
 
 void pen_changed(App& app) {
   set_pen_direct(app, app.pen_direct);
@@ -99,7 +111,10 @@ constexpr RowSpec kRows[kRowCount] = {
      .page = kTablet,
      .number = &App::tablet_width,
      .min = 1,
-     .max = kTabletWidth,
+     .max_of =
+         [] {
+           return surface_tablet().width;
+         },
      .step = 1,
      .format = "%.1f mm",
      .changed = area_changed,
@@ -108,7 +123,10 @@ constexpr RowSpec kRows[kRowCount] = {
      .page = kTablet,
      .number = &App::tablet_height,
      .min = 1,
-     .max = kTabletHeight,
+     .max_of =
+         [] {
+           return surface_tablet().height;
+         },
      .step = 1,
      .format = "%.1f mm",
      .changed = area_changed,
@@ -116,7 +134,10 @@ constexpr RowSpec kRows[kRowCount] = {
     {.label = "Centre X",
      .page = kTablet,
      .number = &App::tablet_x,
-     .max = kTabletWidth,
+     .max_of =
+         [] {
+           return surface_tablet().width;
+         },
      .step = 1,
      .format = "%.1f mm",
      .changed = area_changed,
@@ -124,7 +145,10 @@ constexpr RowSpec kRows[kRowCount] = {
     {.label = "Centre Y",
      .page = kTablet,
      .number = &App::tablet_y,
-     .max = kTabletHeight,
+     .max_of =
+         [] {
+           return surface_tablet().height;
+         },
      .step = 1,
      .format = "%.1f mm",
      .changed = area_changed,
@@ -251,7 +275,7 @@ void show_page(App& app, i32 page) {
 // In hundredths, so round values like 100% and 1.00x are easy to land on.
 void set_number(App& app, i32 row, f32 value) {
   const RowSpec& spec = kRows[row];
-  value = std::clamp(std::round(value * 100) / 100, spec.min, spec.max);
+  value = std::clamp(std::round(value * 100) / 100, spec.min, row_max(spec));
   if (value == app.*spec.number)
     return;
   app.*spec.number = value;
@@ -264,7 +288,7 @@ void number_from_cursor(App& app, i32 row) {
   const PanelLayout p = panel_layout(app);
   const RowSpec&    spec = kRows[row];
   const f32 t = clamp01((app.cursor.x - p.track_x(row)) / p.track_w(row));
-  set_number(app, row, spec.min + t * (spec.max - spec.min));
+  set_number(app, row, spec.min + t * (row_max(spec) - spec.min));
 }
 
 // Flips a switch, steps an option by `step`, or presses a button.
@@ -410,7 +434,8 @@ void settings_draw(App& app) {
                                                                     : 0.0f;
       draw_rounded_rect(r, track_x, track_y - 3, track_w, 6, 3,
                         fade(kWhite, 0.2f * appear));
-      const f32 fill = track_w * (value - spec.min) / (spec.max - spec.min);
+      const f32 fill =
+          track_w * (value - spec.min) / (row_max(spec) - spec.min);
       draw_rounded_rect(r, track_x, track_y - 3, fill, 6, 3,
                         fade(hex_color(0x8844CC), appear));
       draw_circle(r, track_x + fill, track_y, 9 + 2 * hover,

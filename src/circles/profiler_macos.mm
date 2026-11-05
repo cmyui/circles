@@ -15,6 +15,7 @@
 #include <chrono>
 #include <mutex>
 #include <thread>
+#include <unordered_map>
 
 namespace circles {
 
@@ -29,7 +30,9 @@ struct PointerListener {
   std::atomic<PointerAccess>        access{PointerAccess::Asked};
   std::mutex                        mutex;
   std::vector<f64>                  times;
-  std::vector<std::vector<uint8_t>> buffers;  // one per device
+  // Reports' buffers, one per device. Kept after it leaves, in case a
+  // report is still on its way.
+  std::unordered_map<IOHIDDeviceRef, std::vector<uint8_t>> buffers;
   f64                               tick = 0;  // seconds per mach unit
 };
 PointerListener* pointers = nullptr;
@@ -53,8 +56,27 @@ void on_pointer_report(void* tablet,
     tablet_report({report, static_cast<size_t>(length)}, arrived);
 }
 
-// Waits for the permission, then reads reports for good. On a thread of its
-// own: each check of the permission keeps macOS busy for about 11 ms.
+// Each device as it's matched, those present at the start included: its
+// reports are read, and a tablet's are decoded too.
+void on_device_matched(void*, IOReturn, void*, IOHIDDeviceRef ref) {
+  const i32 size = [(__bridge NSNumber*)IOHIDDeviceGetProperty(
+      ref, CFSTR(kIOHIDMaxInputReportSizeKey)) intValue];
+  if (size <= 0)
+    return;
+  auto& buffer = pointers->buffers[ref];
+  buffer.resize(size);
+  void* tablet = tablet_device(ref) ? ref : nullptr;
+  IOHIDDeviceRegisterInputReportWithTimeStampCallback(
+      ref, buffer.data(), size, on_pointer_report, tablet);
+}
+
+void on_device_removed(void*, IOReturn, void*, IOHIDDeviceRef ref) {
+  tablet_removed(ref);
+}
+
+// Waits for the permission, then reads reports for good, from devices as
+// they come and go. On a thread of its own: each check of the permission
+// keeps macOS busy for about 11 ms.
 void listen() {
   for (bool asked = false;;) {
     const IOHIDAccessType access =
@@ -84,22 +106,14 @@ void listen() {
     ];
     IOHIDManagerSetDeviceMatchingMultiple(manager,
                                           (__bridge CFArrayRef)matching);
+    IOHIDManagerRegisterDeviceMatchingCallback(manager, on_device_matched,
+                                               nullptr);
+    IOHIDManagerRegisterDeviceRemovalCallback(manager, on_device_removed,
+                                              nullptr);
     IOHIDManagerScheduleWithRunLoop(manager, CFRunLoopGetCurrent(),
                                     kCFRunLoopDefaultMode);
     // Shared, so drivers such as OpenTabletDriver keep reading too.
     IOHIDManagerOpen(manager, kIOHIDOptionsTypeNone);
-    NSSet* devices = CFBridgingRelease(IOHIDManagerCopyDevices(manager));
-    for (id device in devices) {
-      auto      ref = (__bridge IOHIDDeviceRef)device;
-      const i32 size = [(__bridge NSNumber*)IOHIDDeviceGetProperty(
-          ref, CFSTR(kIOHIDMaxInputReportSizeKey)) intValue];
-      if (size <= 0)
-        continue;
-      auto& buffer = pointers->buffers.emplace_back(size);
-      void* tablet = tablet_device(ref) ? ref : nullptr;
-      IOHIDDeviceRegisterInputReportWithTimeStampCallback(
-          ref, buffer.data(), size, on_pointer_report, tablet);
-    }
   }
   pointers->access = PointerAccess::Listening;
   CFRunLoopRun();

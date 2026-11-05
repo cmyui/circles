@@ -14,6 +14,19 @@ using circles::Vec2;
 
 namespace {
 
+// A tablet of the Wacom Intuos format, 0.01 mm a unit and 2047 the most
+// pressure.
+constexpr circles::TabletModel kIntuos = {
+    .name = "test",
+    .driver_name = "test",
+    .report_size = 10,
+    .format = circles::ReportFormat::WacomIntuos,
+    .width = 152,
+    .height = 95,
+    .max_x = 15200,
+    .max_y = 9500,
+    .max_pressure = 2047};
+
 Vec2 across(const TabletArea& area, f32 x, f32 y) {
   return circles::map_pen(circles::tablet_mapping(area), x, y);
 }
@@ -25,7 +38,7 @@ static void test_decodes_pen_reports() {
   const std::array<u8, 10> in_range = {0x02, 0xe0, 0x34, 0x12, 0x67,
                                        0x05, 0xff, 0x07, 0x00, 0x00};
   PenReport                pen;
-  CHECK(circles::decode_pen_report(in_range, 1.5, pen));
+  CHECK(circles::decode_pen_report(kIntuos, in_range, 1.5, pen));
   CHECK(pen.in_range);
   CHECK_NEAR(pen.x, 46.6f, 1e-3f);
   CHECK_NEAR(pen.y, 13.83f, 1e-3f);
@@ -33,14 +46,14 @@ static void test_decodes_pen_reports() {
   CHECK_EQ(pen.arrived, 1.5);
 
   const std::array<u8, 10> out_of_range = {0x02, 0x80};
-  CHECK(circles::decode_pen_report(out_of_range, 2, pen));
+  CHECK(circles::decode_pen_report(kIntuos, out_of_range, 2, pen));
   CHECK(!pen.in_range);
 
   // Other reports, and the pen's that aren't about its position.
   const std::array<u8, 10> other_id = {0x03, 0xe0};
   const std::array<u8, 10> no_position = {0x02, 0x20};
-  CHECK(!circles::decode_pen_report(other_id, 0, pen));
-  CHECK(!circles::decode_pen_report(no_position, 0, pen));
+  CHECK(!circles::decode_pen_report(kIntuos, other_id, 0, pen));
+  CHECK(!circles::decode_pen_report(kIntuos, no_position, 0, pen));
 }
 
 static void test_spans_the_area() {
@@ -73,7 +86,19 @@ static void test_rotation_turns_the_area_clockwise() {
   CHECK_NEAR(above.y, 0.5f, 1e-5f);
 }
 
+static void test_finds_tablets_by_their_ids_and_report_size() {
+  for (const circles::TabletModel& model : circles::kTablets) {
+    CHECK(circles::find_tablet(model.vendor, model.product,
+                               model.report_size) == &model);
+    CHECK(!circles::find_tablet(model.vendor, model.product + 1,
+                                model.report_size));
+    CHECK(!circles::find_tablet(model.vendor, model.product,
+                                model.report_size + 1));
+  }
+}
+
 int main() {
+  test_finds_tablets_by_their_ids_and_report_size();
   test_decodes_pen_reports();
   test_spans_the_area();
   test_rotation_turns_the_area_clockwise();

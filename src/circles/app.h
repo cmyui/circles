@@ -388,10 +388,10 @@ struct App {
   // onto just the window; the cursor stays in the window either way.
   bool                     pen_direct = false;
   bool                     tablet_full_screen = true;
-  f32                      tablet_x = kTabletWidth / 2;  // the area, in mm
-  f32                      tablet_y = kTabletHeight / 2;
-  f32                      tablet_width = kTabletWidth;
-  f32                      tablet_height = kTabletHeight;
+  f32                      tablet_x = kTablets[0].width / 2;  // the area, mm
+  f32                      tablet_y = kTablets[0].height / 2;
+  f32                      tablet_width = kTablets[0].width;
+  f32                      tablet_height = kTablets[0].height;
   f32                      tablet_rotation = 0;  // degrees clockwise
   f32                      tablet_tip = 1;  // pressure percent that clicks
   // Whether the area was set, by hand or by importing OpenTabletDriver's;
