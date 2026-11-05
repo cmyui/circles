@@ -133,20 +133,34 @@ pen aims:
   report reaching macOS to the game using it.
 
 Reading the tablet needs the Input Monitoring permission, which F5 asks for.
-So far it reads one tablet, the One by Wacom S (CTL-472), decoding its
-reports as OpenTabletDriver does. circles switches it to sending pen reports
-itself, so no driver needs to run; switching back, or quitting, gives the
-tablet its previous mode again. While the pen is in range, a driver's cursor
-and clicks are ignored; a mouse or trackpad still works.
+circles reads the tablets listed in `kTablets` (`src/circles/tablet.h`): the
+One by Wacom S (CTL-472) and the Intuos5 touch S (PTH-450). Each is decoded
+by its report format, as OpenTabletDriver decodes it, and is noticed when
+plugged in while the game runs. With no supported tablet connected, F5 says
+so and the pen stays with its driver. circles switches each supported
+tablet connected to sending pen reports itself, so no driver needs to run,
+and reads them all; switching back, or quitting, gives each its previous
+mode again. While the pen is in range, a driver's cursor and clicks are
+ignored; a mouse or trackpad still works.
 
 The Tablet page sets:
 
 - **The area**: the part of the tablet that maps onto the screen, by its
-  centre and size in mm and its clockwise rotation in degrees. The first
-  time the pen is read, circles imports the area OpenTabletDriver has, if
-  any; **Import area from OpenTabletDriver** does it again. Only the tablet
-  area is imported: it maps onto the whole display, whatever display area
-  OpenTabletDriver had.
+  centre and size in mm and its clockwise rotation in degrees. The sliders
+  range over the surface of the tablet connected last. circles never
+  changes the area on its own: when a tablet connects whose edge the area
+  goes past, it warns that part of the screen is out of the pen's reach.
+  **Fit area to tablet** moves the area onto the connected tablet,
+  shrinking it if need be while keeping its shape.
+- **Importing**: the first time the pen is read, circles imports the area
+  OpenTabletDriver has for the tablet connected, if any; **Import OTD
+  area** does it again. Only the tablet area is imported: it maps onto the
+  whole display, whatever display area OpenTabletDriver had.
+- **Profiles**: two slots, each holding an area under a name. **Save**
+  asks for a name (Enter saves, Esc stops) and saves the current area
+  under it, **Load** makes the slot's area the current one, warning if it
+  goes past the connected tablet's edge, and **Delete** empties the slot.
+  Pick a button with the mouse, or with Left / Right and Enter.
 - **Map to full screen**: on, the area maps onto the whole display, and
   windowed, the cursor stops at the window's edges; off, it maps onto just
   the window. In full screen they're the same.

@@ -32,7 +32,6 @@ constexpr const char* kSettingsPath = "settings.txt";
 constexpr f64 kTransitionHalf = 0.18;  // seconds to fade out, then back in
 constexpr f64 kBackdropFade = 0.4;
 constexpr f64 kTrailLength = 0.12;
-constexpr f64 kToastDuration = 2.5;
 constexpr f32 kVolumeStep = 0.05f;  // per scroll wheel notch
 constexpr f32 kTau = 6.2831853f;
 
@@ -60,6 +59,7 @@ struct Settings {
   TabletArea  tablet_area;
   bool        tablet_area_set = false;
   f32         tablet_tip = 1;
+  std::array<TabletProfile, 2> tablet_profiles;
 };
 
 Settings load_settings() {
@@ -112,6 +112,20 @@ Settings load_settings() {
           area.width > 0 && area.height > 0;
       if (!settings.tablet_area_set)
         area = {};
+    }
+    else if (key.starts_with("tablet_profile_")) {
+      // tablet_profile_N=x y width height rotation name, N from 1.
+      const size_t  slot = std::strtoul(line.c_str() + 15, nullptr, 10) - 1;
+      TabletProfile profile;
+      TabletArea&   area = profile.area;
+      i32           name = 0;
+      if (slot < settings.tablet_profiles.size() &&
+          std::sscanf(value, "%f %f %f %f %f %n", &area.x, &area.y,
+                      &area.width, &area.height, &area.rotation, &name) == 5 &&
+          area.width > 0 && area.height > 0 && value[name]) {
+        profile.name = value + name;
+        settings.tablet_profiles[slot] = std::move(profile);
+      }
     }
     else if (key == "readout")
       settings.readout =
@@ -509,6 +523,14 @@ void read_pen(App& app) {
   auto& pen = app.pen;
   if (!app.pen_direct)
     return;
+  // A tablet connected whose surface the area goes past: said once.
+  const TabletModel* tablet = connected_tablet();
+  if (tablet != pen.tablet) {
+    pen.tablet = tablet;
+    const std::string warning = tablet_area_warning(app);
+    if (!warning.empty())
+      show_toast(app, "Pen: " + warning, kWarningSeconds);
+  }
   pen.reports.clear();
   take_pen_reports(pen.reports);
   if (pen.reports.empty())
@@ -861,11 +883,11 @@ void draw_overlays(App& app) {
     settings_draw(app);
   if (app.profiler.active && app.profiler.overlay)
     draw_profiler_overlay(app);
-  if (app.now - app.toast_time < kToastDuration) {
-    const f32 alpha = clamp01(
-        static_cast<f32>(std::min(app.now - app.toast_time,
-                                  kToastDuration - (app.now - app.toast_time)) /
-                         0.25));
+  if (app.now - app.toast_time < app.toast_seconds) {
+    const f32 alpha = clamp01(static_cast<f32>(
+        std::min(app.now - app.toast_time,
+                 app.toast_seconds - (app.now - app.toast_time)) /
+        0.25));
     const f32 width = measure_text(app.bold, app.toast, 17) + 40;
     draw_rounded_rect(r, (app.width - width) / 2, 18, width, 40, 20,
                       fade(hex_color(0x15152A), 0.9f * alpha));
@@ -887,10 +909,13 @@ void draw_overlays(App& app) {
 
 }  // namespace
 
+TabletArea tablet_area(const App& app) {
+  return {app.tablet_x, app.tablet_y, app.tablet_width, app.tablet_height,
+          app.tablet_rotation};
+}
+
 void update_tablet_mapping(App& app) {
-  app.pen.mapping =
-      tablet_mapping({app.tablet_x, app.tablet_y, app.tablet_width,
-                      app.tablet_height, app.tablet_rotation});
+  app.pen.mapping = tablet_mapping(tablet_area(app));
 }
 
 void set_tablet_area(App& app, const TabletArea& area) {
@@ -910,6 +935,15 @@ bool import_tablet_settings(App& app) {
   return true;
 }
 
+std::string tablet_area_warning(const App& app) {
+  const TabletModel* tablet = connected_tablet();
+  const TabletArea   area = tablet_area(app);
+  if (!tablet || fit_area(area, *tablet) == area)
+    return {};
+  return std::string("the area goes past the ") + tablet->name +
+         "'s edge, so part of the screen is out of reach (Ctrl+O to fit it)";
+}
+
 void set_pen_direct(App& app, bool on) {
   app.pen_direct = on;
   app.pen.in_range = app.pen.tip = false;
@@ -917,9 +951,9 @@ void set_pen_direct(App& app, bool on) {
   // The aim's figures start over, each describing one way of reading it,
   // and movements the other way made aren't timed.
   auto& readout = app.readout;
-  for (LatencyStat* stat : {&readout.driver, &readout.aim_interval,
-                            &readout.aim_read, &readout.aim_wait,
-                            &readout.aim_screen})
+  for (LatencyStat* stat :
+       {&readout.driver, &readout.aim_interval, &readout.aim_read,
+        &readout.aim_wait, &readout.aim_screen})
     *stat = {};
   readout.moves.clear();
   readout.waiting_moves.clear();
@@ -930,12 +964,15 @@ void set_pen_direct(App& app, bool on) {
   }
   // The first time, the area OpenTabletDriver has.
   const bool imported = !app.tablet_area_set && import_tablet_settings(app);
+  const TabletModel* tablet = connected_tablet();
   if (listen_to_pointers() != PointerAccess::Listening)
     show_toast(app, "Pen: read by circles once Input Monitoring is allowed");
-  else if (imported)
-    show_toast(app, "Pen: read by circles, with OpenTabletDriver's area");
+  else if (!tablet)
+    show_toast(app,
+               "Pen: no supported tablet connected, so through its driver");
   else
-    show_toast(app, "Pen: read by circles");
+    show_toast(app, std::string("Pen: read by circles, ") + tablet->name +
+                        (imported ? ", with OpenTabletDriver's area" : ""));
 }
 
 void apply_frame_limiter(App& app) {
@@ -981,6 +1018,7 @@ bool app_init(App& app) {
   app.tablet_tip = settings.tablet_tip;
   app.tablet_area_set = settings.tablet_area_set;
   set_tablet_area(app, settings.tablet_area);
+  app.tablet_profiles = settings.tablet_profiles;
   if (settings.pen_direct)
     set_pen_direct(app, true);
   set_master_volume(app.audio, settings.volume);
@@ -1205,8 +1243,9 @@ void app_key(App& app, i32 key, i32 action) {
 }
 
 void app_char(App& app, u32 codepoint) {
-  if (accepting_input(app) && !app.settings_menu.open &&
-      app.screen == Screen::SongSelect)
+  if (app.settings_menu.open)
+    settings_char(app, codepoint);
+  else if (accepting_input(app) && app.screen == Screen::SongSelect)
     select_char(app, codepoint);
 }
 
@@ -1347,9 +1386,10 @@ void draw_backdrop(App& app, f32 dim, f32 parallax) {
                    fade(tint, appear), zoom, shift_x, shift_y);
 }
 
-void show_toast(App& app, std::string text) {
+void show_toast(App& app, std::string text, f64 seconds) {
   app.toast = std::move(text);
   app.toast_time = app.now;
+  app.toast_seconds = seconds;
 }
 
 void save_settings(const App& app) {
@@ -1372,6 +1412,13 @@ void save_settings(const App& app) {
     file << "tablet_area=" << app.tablet_x << ' ' << app.tablet_y << ' '
          << app.tablet_width << ' ' << app.tablet_height << ' '
          << app.tablet_rotation << '\n';
+  for (size_t i = 0; i < app.tablet_profiles.size(); ++i) {
+    const auto& [name, area] = app.tablet_profiles[i];
+    if (!name.empty())
+      file << "tablet_profile_" << i + 1 << '=' << area.x << ' ' << area.y
+           << ' ' << area.width << ' ' << area.height << ' ' << area.rotation
+           << ' ' << name << '\n';
+  }
   file << "readout=" << app.readout.mode << '\n';
 }
 
