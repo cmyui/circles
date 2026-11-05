@@ -44,7 +44,8 @@ the display depends on the window:
 - Windowed, every pass draws a frame and hands it to macOS's window
   compositor, which shows the newest at each display refresh.
 - Full screen (F11), frames skip the compositor and go straight to the
-  display. How is the frame limiter's choice (settings, Ctrl+O):
+  display. How is the frame limiter's choice (F7 steps through them, or
+  settings, Ctrl+O):
   - **VSync**, the default: one frame per refresh, shown whole. Each is drawn
     as soon as the display frees a buffer and shows at the next refresh,
     about one refresh after its drawing starts.
@@ -216,6 +217,7 @@ with them. Hidden and Flashlight make S and SS grades silver.
 | F10 | Mouse buttons on or off for hitting, saved in `settings.txt` |
 | F11 | Full screen, as the window's green button enters it: the display keeps its resolution |
 | F6 | Latency readout: a line, a table of stages, or hidden; saved in `settings.txt` |
+| F7 | Frame limiter: VSync, 2x, 4x or 8x refresh, or Unlimited (see Frames and latency); saved in `settings.txt` |
 | F5 | The pen: read by circles, or through its driver (see Tablet); saved in `settings.txt` |
 | F1 | Mod select (song select) |
 
