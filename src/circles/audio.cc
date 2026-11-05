@@ -86,113 +86,238 @@ f64 query_output_latency() {
   return frames * 1000.0 / rate;
 }
 
-// The built-in sounds. Every sample set shares one set of hitsounds.
-enum class Synth : u8 {
-  HitNormal,
-  HitWhistle,
-  HitFinish,
-  HitClap,
-  SliderTick,
-  ComboBreak,
-  MenuHover,
-  MenuClick,
-  SpinnerBonus,
-  Kick,
-  Clap,
-  Hat,
-  Crash,
-};
-
+// The built-in sounds. Hitsounds come in three sample sets, as in osu!
+// skins: normal (crisp), soft (warmer and duller) and drum (a kit). They're
+// percussion made of filtered noise, sines and square waves; the hits are
+// noise only, flat and drum-like, so hearing thousands in a map doesn't
+// wear.
 constexpr i32 kHitsoundKinds = static_cast<i32>(HitsoundKind::Count);
 constexpr i32 kHitsoundEffects = 3 * kHitsoundKinds;
 
-Synth synth_for(Sound sound) {
-  const i32 index = static_cast<i32>(sound);
-  if (index < kHitsoundEffects)
-    return static_cast<Synth>(index % kHitsoundKinds);
-  return static_cast<Synth>(index - kHitsoundEffects + kHitsoundKinds);
+using Samples = std::vector<f32>;
+
+f32 time_of(size_t i) { return static_cast<f32>(i) / kSampleRate; }
+
+// Each sample at time t, from f(t).
+template <typename F>
+Samples render(f32 seconds, F&& f) {
+  Samples out(static_cast<size_t>(seconds * kSampleRate));
+  for (size_t i = 0; i < out.size(); ++i)
+    out[i] = f(time_of(i));
+  return out;
 }
 
-std::vector<f32> synthesize(Synth sound) {
+// Each sample of `x` at time t becomes f(t, it).
+template <typename F>
+Samples shaped(Samples x, F&& f) {
+  for (size_t i = 0; i < x.size(); ++i)
+    x[i] = f(time_of(i), x[i]);
+  return x;
+}
+
+Samples noise(f32 seconds, u32 seed) {
+  return render(seconds, [&](f32) {
+    seed = seed * 1664525u + 1013904223u;
+    return static_cast<f32>(seed >> 8) / 8388608.0f - 1;
+  });
+}
+
+enum class Filter : u8 { Lowpass, Highpass, Bandpass };
+
+// The RBJ cookbook's biquads; the bandpass peaks at 0 dB.
+Samples filtered(Samples x, Filter kind, f32 freq, f32 q = 0.707f) {
+  const f32 w = kTau * freq / kSampleRate;
+  const f32 alpha = std::sin(w) / (2 * q), cos = std::cos(w);
+  f32       b[3];
+  if (kind == Filter::Lowpass)
+    b[0] = b[2] = (1 - cos) / 2, b[1] = 1 - cos;
+  else if (kind == Filter::Highpass)
+    b[0] = b[2] = (1 + cos) / 2, b[1] = -(1 + cos);
+  else
+    b[0] = alpha, b[1] = 0, b[2] = -alpha;
+  const f32 a0 = 1 + alpha, a1 = -2 * cos / a0, a2 = (1 - alpha) / a0;
+  f32       x1 = 0, x2 = 0, y1 = 0, y2 = 0;
+  for (f32& v : x) {
+    const f32 y = (b[0] * v + b[1] * x1 + b[2] * x2) / a0 - a1 * y1 - a2 * y2;
+    x2 = x1, x1 = v, y2 = y1, y1 = y;
+    v = y;
+  }
+  return x;
+}
+
+// Falls by e every `tau` seconds from `start`; silent before it.
+f32 decay(f32 t, f32 tau, f32 start = 0) {
+  return t < start ? 0 : std::exp(-(t - start) / tau);
+}
+
+f32 attack(f32 t, f32 seconds) { return std::min(1.0f, t / seconds); }
+
+// A sine whose pitch falls from `start` to `end` Hz, by e every `tau`.
+Samples sweep(f32 seconds, f32 start, f32 end, f32 tau) {
+  f32 phase = 0;
+  return render(seconds, [&](f32 t) {
+    phase += kTau * (end + (start - end) * std::exp(-t / tau)) / kSampleRate;
+    return std::sin(phase);
+  });
+}
+
+// Six square waves at inharmonic ratios: a cymbal's shimmer.
+Samples metal(f32 seconds, f32 scale) {
+  return render(seconds, [&](f32 t) {
+    f32 sum = 0;
+    for (f32 f : {205.3f, 304.4f, 369.6f, 522.7f, 540.0f, 800.0f})
+      sum += std::sin(kTau * f * scale * t) >= 0 ? 1 : -1;
+    return sum / 6;
+  });
+}
+
+// A flat, drum-like hit: noise through a band twice, so no pitch stands
+// out, dying by e every `tau`, over a little low noise for a thump.
+Samples drum_hit(f32 seconds, f32 centre, f32 q, f32 tau, f32 thump_tau,
+                 u32 seed) {
+  const Samples thump =
+      filtered(noise(seconds, seed + 1), Filter::Lowpass, 300);
+  size_t i = 0;
+  return shaped(filtered(filtered(noise(seconds, seed), Filter::Bandpass,
+                                  centre, q),
+                         Filter::Bandpass, centre, q),
+                [&](f32 t, f32 band) {
+                  return (band * decay(t, tau) +
+                          0.4f * thump[i++] * decay(t, thump_tau)) *
+                         attack(t, 0.0005f);
+                });
+}
+
+Samples crash(f32 seconds, f32 tau, f32 cutoff, f32 attack_s, u32 seed) {
+  const Samples hiss = filtered(
+      filtered(noise(seconds, seed), Filter::Highpass, 4000), Filter::Lowpass,
+      10000);
+  const Samples hit =
+      filtered(noise(seconds, seed + 1), Filter::Bandpass, 3000);
+  size_t i = 0;
+  return shaped(filtered(metal(seconds, 1), Filter::Highpass, cutoff),
+                [&](f32 t, f32 shimmer) {
+                  const f32 out = shimmer * decay(t, tau) +
+                                  0.5f * hiss[i] * decay(t, tau * 0.7f) +
+                                  0.6f * hit[i] * decay(t, 0.01f);
+                  ++i;
+                  return out * attack(t, attack_s);
+                });
+}
+
+// Three quick bursts of band noise, then a tail.
+Samples clap(f32 centre, f32 burst_tau, f32 tail_tau, u32 seed) {
+  return shaped(
+      filtered(noise(0.33f, seed), Filter::Bandpass, centre, 1.2f),
+      [&](f32 t, f32 band) {
+        f32 envelope = 0.7f * decay(t, tail_tau, 0.027f);
+        for (f32 start : {0.0f, 0.009f, 0.018f})
+          envelope = std::max(envelope, decay(t, burst_tau, start));
+        return band * envelope;
+      });
+}
+
+// One of the hitsounds, by sample set and kind.
+Samples hitsound(Sound sound) {
+  switch (sound) {
+    case Sound::NormalHitNormal:
+      return drum_hit(0.2f, 1150, 0.9f, 0.03f, 0.015f, 1);
+    case Sound::NormalHitWhistle: {
+      const Samples breath = filtered(noise(0.35f, 3), Filter::Bandpass, 2000, 4);
+      size_t i = 0;
+      return shaped(sweep(0.35f, 2050, 1950, 0.15f), [&](f32 t, f32 tone) {
+        tone += 0.15f * std::sin(kTau * 3950 * t) +
+                0.1f * breath[i++] * decay(t, 0.04f);
+        return tone * attack(t, 0.003f) * decay(t, 0.07f);
+      });
+    }
+    case Sound::NormalHitFinish:
+    case Sound::DrumHitFinish:
+      return crash(1.6f, 0.35f, 3500, 0.001f, 4);
+    case Sound::NormalHitClap:
+      return clap(1100, 0.004f, 0.045f, 5);
+    case Sound::NormalSliderTick:
+      return shaped(filtered(noise(0.06f, 6), Filter::Highpass, 3000),
+                    [](f32 t, f32 click) {
+                      return 0.3f * click * decay(t, 0.002f) +
+                             std::sin(kTau * 3200 * t) * decay(t, 0.01f);
+                    });
+    case Sound::SoftHitNormal:
+      return filtered(drum_hit(0.18f, 620, 0.8f, 0.025f, 0.015f, 7),
+                      Filter::Lowpass, 1500);
+    case Sound::SoftHitWhistle:
+      return shaped(sweep(0.45f, 1550, 1480, 0.2f), [](f32 t, f32 tone) {
+        return tone * attack(t, 0.008f) * decay(t, 0.09f);
+      });
+    case Sound::SoftHitFinish:
+      return filtered(crash(2, 0.45f, 3000, 0.005f, 8), Filter::Lowpass, 6000);
+    case Sound::SoftHitClap:
+      return clap(850, 0.006f, 0.06f, 10);
+    case Sound::SoftSliderTick:
+      return render(0.05f, [](f32 t) {
+        return std::sin(kTau * 2200 * t) * attack(t, 0.001f) * decay(t, 0.01f);
+      });
+    case Sound::DrumHitNormal: {
+      const Samples click = filtered(noise(0.55f, 11), Filter::Bandpass, 3000);
+      size_t i = 0;
+      return shaped(sweep(0.55f, 160, 55, 0.025f), [&](f32 t, f32 kick) {
+        return (kick * decay(t, 0.12f) + 0.3f * click[i++] * decay(t, 0.003f)) *
+               attack(t, 0.0005f);
+      });
+    }
+    case Sound::DrumHitWhistle: {
+      const Samples skin = filtered(noise(0.55f, 12), Filter::Lowpass, 1500);
+      size_t i = 0;
+      return shaped(sweep(0.55f, 220, 160, 0.06f), [&](f32 t, f32 tom) {
+        return (tom * decay(t, 0.12f) + 0.2f * skin[i++] * decay(t, 0.02f)) *
+               attack(t, 0.0005f);
+      });
+    }
+    case Sound::DrumHitClap:
+      return shaped(filtered(noise(0.35f, 13), Filter::Bandpass, 4000, 0.7f),
+                    [](f32 t, f32 wires) {
+                      return (0.5f * std::sin(kTau * 190 * t) * decay(t, 0.04f) +
+                              wires * decay(t, 0.07f)) *
+                             attack(t, 0.0005f);
+                    });
+    case Sound::DrumSliderTick:
+      return shaped(filtered(metal(0.06f, 4), Filter::Highpass, 8000),
+                    [](f32 t, f32 hat) { return hat * decay(t, 0.012f); });
+    default:
+      return {};
+  }
+}
+
+Samples synthesize(Sound sound) {
   const f32 rate = kSampleRate;
   u32       seed = 0x9E3779B9u + static_cast<u32>(sound) * 7919u;
-  auto      noise = [&seed] {
+  auto      next_noise = [&seed] {
     seed = seed * 1664525u + 1013904223u;
     return static_cast<f32>(seed >> 8) / 8388608.0f - 1;
   };
-  auto render = [&](f32 seconds, auto&& sample) {
-    std::vector<f32> out(static_cast<size_t>(seconds * rate));
-    for (size_t i = 0; i < out.size(); ++i)
-      out[i] = sample(i / rate);
-    return out;
-  };
 
-  std::vector<f32> pcm;
-  f32              phase = 0, lowpass = 0, previous = 0;
+  const i32 index = static_cast<i32>(sound);
+  Samples   pcm;
+  f32       phase = 0, lowpass = 0, previous = 0;
   switch (sound) {
-    case Synth::HitNormal:
-      // A soft "tock": a quickly falling pitch over a burst of bright noise.
-      pcm = render(0.12f, [&](f32 t) {
-        phase += kTau * (160 + 340 * std::exp(-t * 70)) / rate;
-        const f32 n = noise();
-        lowpass += 0.35f * (n - lowpass);
-        return 0.7f * std::sin(phase) * std::exp(-t * 38) +
-               0.45f * (n - lowpass) * std::exp(-t * 160);
-      });
-      break;
-    case Synth::HitWhistle:
-      pcm = render(0.3f, [&](f32 t) {
-        const f32 envelope = std::min(1.0f, t * 200) * std::exp(-t * 10);
-        const f32 vibrato = 1 + 0.004f * std::sin(kTau * 7 * t);
-        return envelope * (std::sin(kTau * 1320 * vibrato * t) +
-                           0.25f * std::sin(kTau * 2640 * vibrato * t));
-      });
-      break;
-    case Synth::HitFinish:
-      // Cymbal-like: high-passed noise with a long tail over a low thump.
-      pcm = render(1.1f, [&](f32 t) {
-        const f32 n = noise();
-        const f32 high = n - previous;
-        previous = n;
-        return 0.5f * high * std::exp(-t * 4) +
-               0.5f * std::sin(kTau * 95 * t) * std::exp(-t * 9);
-      });
-      break;
-    case Synth::HitClap:
-      // Three quick noise bursts, then a short tail.
-      pcm = render(0.22f, [&](f32 t) {
-        const f32 n = noise();
-        lowpass += 0.25f * (n - lowpass);
-        f32 envelope = 0.35f * std::exp(-t * 22);
-        for (f32 start : {0.0f, 0.012f, 0.025f})
-          if (t >= start)
-            envelope = std::max(envelope, std::exp(-(t - start) * 220));
-        return (n - lowpass) * envelope;
-      });
-      break;
-    case Synth::SliderTick:
-      pcm = render(0.05f, [&](f32 t) {
-        return 0.6f * std::sin(kTau * 2600 * t) * std::exp(-t * 90);
-      });
-      break;
-    case Synth::ComboBreak:
+    case Sound::ComboBreak:
       pcm = render(0.35f, [&](f32 t) {
         phase += kTau * 320 * std::exp(-t * 5) / rate;
         return std::sin(phase) * std::exp(-t * 7) * std::min(1.0f, t * 300);
       });
       break;
-    case Synth::MenuHover:
+    case Sound::MenuHover:
       pcm = render(0.035f, [&](f32 t) {
         return 0.5f * std::sin(kTau * 2200 * t) * std::exp(-t * 140);
       });
       break;
-    case Synth::MenuClick:
+    case Sound::MenuClick:
       pcm = render(0.12f, [&](f32 t) {
         phase += kTau * (700 + 500 * std::exp(-t * 40)) / rate;
         return std::sin(phase) * std::exp(-t * 35);
       });
       break;
-    case Synth::SpinnerBonus:
+    case Sound::SpinnerBonus:
       pcm = render(0.7f, [&](f32 t) {
         const f32 envelope = std::min(1.0f, t * 300) * std::exp(-t * 5);
         return envelope *
@@ -200,16 +325,16 @@ std::vector<f32> synthesize(Synth sound) {
                 0.25f * std::sin(kTau * 3136 * t));
       });
       break;
-    case Synth::Kick:
+    case Sound::NightcoreKick:
       // A sine dropping from a punchy click to a low boom.
       pcm = render(0.35f, [&](f32 t) {
         phase += kTau * (48 + 140 * std::exp(-t * 30)) / rate;
         return std::sin(phase) * std::exp(-t * 9) * std::min(1.0f, t * 2000);
       });
       break;
-    case Synth::Clap:
+    case Sound::NightcoreClap:
       pcm = render(0.25f, [&](f32 t) {
-        const f32 n = noise();
+        const f32 n = next_noise();
         lowpass += 0.4f * (n - lowpass);
         f32 envelope = 0.4f * std::exp(-t * 18);
         for (f32 start : {0.0f, 0.009f, 0.018f})
@@ -218,33 +343,43 @@ std::vector<f32> synthesize(Synth sound) {
         return (n - lowpass) * envelope;
       });
       break;
-    case Synth::Hat:
+    case Sound::NightcoreHat:
       pcm = render(0.06f, [&](f32 t) {
-        const f32 n = noise();
+        const f32 n = next_noise();
         const f32 high = n - previous;
         previous = n;
         return high * std::exp(-t * 80);
       });
       break;
-    case Synth::Crash:
+    case Sound::NightcoreFinish:
       pcm = render(1.4f, [&](f32 t) {
-        const f32 n = noise();
+        const f32 n = next_noise();
         const f32 high = n - previous;
         previous = n;
         return high * std::exp(-t * 3) * std::min(1.0f, t * 1000);
       });
       break;
+    default:
+      pcm = hitsound(sound);
+      break;
   }
 
   // Additions, ticks and the drum track sit under the main hit sound.
-  const f32 loudness = sound == Synth::HitWhistle   ? 0.56f
-                       : sound == Synth::HitClap    ? 0.64f
-                       : sound == Synth::SliderTick ? 0.48f
-                       : sound == Synth::Hat        ? 0.3f
-                       : sound == Synth::Crash      ? 0.4f
-                       : sound >= Synth::Kick       ? 0.6f
-                                                    : 0.8f;
-  f32       peak = 1e-6f;
+  const auto kind = index < kHitsoundEffects
+                        ? static_cast<HitsoundKind>(index % kHitsoundKinds)
+                        : HitsoundKind::Count;
+  const f32  loudness = kind == HitsoundKind::Whistle      ? 0.56f
+                        : kind == HitsoundKind::Clap       ? 0.64f
+                        : kind == HitsoundKind::SliderTick ? 0.48f
+                        : sound == Sound::NightcoreHat     ? 0.3f
+                        : sound == Sound::NightcoreFinish  ? 0.4f
+                        : sound >= Sound::NightcoreKick    ? 0.6f
+                                                           : 0.8f;
+  // The last 15 ms fade out, so no sound stops abruptly.
+  const size_t fade = std::min(pcm.size(), static_cast<size_t>(0.015f * rate));
+  for (size_t i = 0; i < fade; ++i)
+    pcm[pcm.size() - fade + i] *= 1 - static_cast<f32>(i) / fade;
+  f32 peak = 1e-6f;
   for (f32 s : pcm)
     peak = std::max(peak, std::abs(s));
   for (f32& s : pcm)
@@ -536,7 +671,7 @@ void load_sounds(
     if (!pcm && !path.empty())
       fprintf(stderr, "audio: can't decode %s\n", path.c_str());
     load_bank(audio, audio.sounds[i],
-              pcm ? std::move(*pcm) : synthesize(synth_for(sound)));
+              pcm ? std::move(*pcm) : synthesize(sound));
   }
 }
 
