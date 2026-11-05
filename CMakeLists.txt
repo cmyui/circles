@@ -120,10 +120,13 @@ target_link_libraries(circles PRIVATE circles_core)
 set(CIRCLES_SIGN_IDENTITY "-" CACHE STRING
   "codesign identity for circles.app; - signs ad hoc")
 # Signed again whenever the app or a file in it changes: a resource changed
-# alone is copied in without relinking, and must be covered too.
+# alone is copied in without relinking, and must be covered too. Touching
+# the app's folder then has Finder and the Dock show its icon anew: they
+# go by its date, which a file changed inside it leaves as it was.
 add_custom_command(OUTPUT circles.signed
   COMMAND codesign --force --sign "${CIRCLES_SIGN_IDENTITY}"
     "$<TARGET_BUNDLE_DIR:circles>"
+  COMMAND touch "$<TARGET_BUNDLE_DIR:circles>"
   COMMAND ${CMAKE_COMMAND} -E touch circles.signed
   DEPENDS circles shaders/circles.metal macos/circles.icns macos/Info.plist)
 add_custom_target(sign_circles ALL DEPENDS circles.signed)
