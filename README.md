@@ -146,14 +146,21 @@ ignored; a mouse or trackpad still works.
 The Tablet page sets:
 
 - **The area**: the part of the tablet that maps onto the screen, by its
-  centre and size in mm and its clockwise rotation in degrees, on the
-  surface of the tablet connected last. When a tablet connects whose
-  surface the area doesn't fit on, circles moves it on, shrinking it if
-  need be while keeping its shape, and says so. The first time the pen is
-  read, circles imports the area OpenTabletDriver has for the tablet
-  connected, if any; **Import area from OpenTabletDriver** does it again. Only the tablet
-  area is imported: it maps onto the whole display, whatever display area
-  OpenTabletDriver had.
+  centre and size in mm and its clockwise rotation in degrees. The sliders
+  range over the surface of the tablet connected last. circles never
+  changes the area on its own: when a tablet connects whose edge the area
+  goes past, it warns that part of the screen is out of the pen's reach.
+  **Fit area to tablet** moves the area onto the connected tablet,
+  shrinking it if need be while keeping its shape.
+- **Importing**: the first time the pen is read, circles imports the area
+  OpenTabletDriver has for the tablet connected, if any; **Import OTD
+  area** does it again. Only the tablet area is imported: it maps onto the
+  whole display, whatever display area OpenTabletDriver had.
+- **Profiles**: two slots, each holding an area under a name. **Save**
+  asks for a name (Enter saves, Esc stops) and saves the current area
+  under it, **Load** makes the slot's area the current one, warning if it
+  goes past the connected tablet's edge, and **Delete** empties the slot.
+  Pick a button with the mouse, or with Left / Right and Enter.
 - **Map to full screen**: on, the area maps onto the whole display, and
   windowed, the cursor stops at the window's edges; off, it maps onto just
   the window. In full screen they're the same.

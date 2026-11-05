@@ -20,6 +20,7 @@
 
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
+#include <array>
 #include <deque>
 #include <future>
 #include <memory>
@@ -329,6 +330,12 @@ struct Readout {
   i32                       shown_rate = 0;
 };
 
+// A tablet area saved under a name; an empty name is an empty slot.
+struct TabletProfile {
+  std::string name;
+  TabletArea  area;
+};
+
 // Not movable: Audio must stay put.
 struct App {
   Profiler                 profiler;
@@ -397,12 +404,14 @@ struct App {
   // Whether the area was set, by hand or by importing OpenTabletDriver's;
   // until then, reading the pen imports it.
   bool                     tablet_area_set = false;
+  // Areas saved under names, in the Tablet page's slots.
+  std::array<TabletProfile, 2> tablet_profiles;
   struct Pen {
     TabletMapping          mapping;
     std::vector<PenReport> reports;  // being handled
     bool                   in_range = false, tip = false;
     f64                    last = -1;  // when its last report arrived
-    const TabletModel*     tablet = nullptr;  // the area was last fitted to
+    const TabletModel*     tablet = nullptr;  // connected, when last checked
   } pen;
   struct SettingsMenu {
     bool open = false;
@@ -410,6 +419,9 @@ struct App {
     bool dragging = false;
     i32  selected = 0;  // the row the keys change
     i32  page = 0;
+    i32  action = 0;  // a profile row's button the keys pick
+    i32  naming = -1;  // the profile slot whose name is being typed
+    std::string name;  // as typed so far
   } settings_menu;
 
   MainMenu               menu;
@@ -570,13 +582,17 @@ void gameplay_key(App& app, i32 key, i32 action, f64 wall);
 void gameplay_click(App& app, i32 button, i32 action, f64 wall);
 void gameplay_focus_lost(App& app);
 
-// The pen read directly or through its driver; its area set, or changed;
+// The pen read directly or through its driver; its area, set, or changed;
 // and OpenTabletDriver's area and tip threshold imported, false if it has
 // none.
-void set_pen_direct(App& app, bool on);
-void set_tablet_area(App& app, const TabletArea& area);
-void update_tablet_mapping(App& app);
+void       set_pen_direct(App& app, bool on);
+TabletArea tablet_area(const App& app);
+void       set_tablet_area(App& app, const TabletArea& area);
+void       update_tablet_mapping(App& app);
 bool import_tablet_settings(App& app);
+// A warning, if the area goes past the connected tablet's edge; empty if
+// it's on its surface, or none is connected.
+std::string tablet_area_warning(const App& app);
 
 // The frame limiter's choices, as the settings show them, in
 // app.frame_limiter's order.
@@ -590,6 +606,7 @@ void toggle_settings(App& app);
 void settings_key(App& app, i32 key, i32 action);
 void settings_click(App& app, i32 button, i32 action);
 void settings_cursor(App& app);
+void settings_char(App& app, u32 codepoint);
 void settings_draw(App& app);
 
 // results.cc

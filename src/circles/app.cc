@@ -60,6 +60,7 @@ struct Settings {
   TabletArea  tablet_area;
   bool        tablet_area_set = false;
   f32         tablet_tip = 1;
+  std::array<TabletProfile, 2> tablet_profiles;
 };
 
 Settings load_settings() {
@@ -112,6 +113,20 @@ Settings load_settings() {
           area.width > 0 && area.height > 0;
       if (!settings.tablet_area_set)
         area = {};
+    }
+    else if (key.starts_with("tablet_profile_")) {
+      // tablet_profile_N=x y width height rotation name, N from 1.
+      const size_t  slot = std::strtoul(line.c_str() + 15, nullptr, 10) - 1;
+      TabletProfile profile;
+      TabletArea&   area = profile.area;
+      i32           name = 0;
+      if (slot < settings.tablet_profiles.size() &&
+          std::sscanf(value, "%f %f %f %f %f %n", &area.x, &area.y,
+                      &area.width, &area.height, &area.rotation, &name) == 5 &&
+          area.width > 0 && area.height > 0 && value[name]) {
+        profile.name = value + name;
+        settings.tablet_profiles[slot] = std::move(profile);
+      }
     }
     else if (key == "readout")
       settings.readout =
@@ -503,30 +518,19 @@ void set_cursor(App& app, f64 x, f64 y) {
   settings_cursor(app);
 }
 
-// Keeps the area on a newly connected tablet's surface, saying so when it
-// had to move or shrink it.
-void fit_tablet_area(App& app, const TabletModel& tablet) {
-  const TabletArea area{app.tablet_x, app.tablet_y, app.tablet_width,
-                        app.tablet_height, app.tablet_rotation};
-  const TabletArea fitted = fit_area(area, tablet);
-  if (fitted == area)
-    return;
-  set_tablet_area(app, fitted);
-  show_toast(app, std::string("Pen: the area went past the ") + tablet.name +
-                      "'s surface, so it was fitted onto it");
-}
-
 // Aims and clicks with the pen's reports since the last pass, each at its
 // own time. The tip is the left button, as OpenTabletDriver binds it.
 void read_pen(App& app) {
   auto& pen = app.pen;
   if (!app.pen_direct)
     return;
+  // A tablet connected whose surface the area goes past: said once.
   const TabletModel* tablet = connected_tablet();
   if (tablet != pen.tablet) {
     pen.tablet = tablet;
-    if (tablet)
-      fit_tablet_area(app, *tablet);
+    const std::string warning = tablet_area_warning(app);
+    if (!warning.empty())
+      show_toast(app, "Pen: " + warning);
   }
   pen.reports.clear();
   take_pen_reports(pen.reports);
@@ -906,10 +910,13 @@ void draw_overlays(App& app) {
 
 }  // namespace
 
+TabletArea tablet_area(const App& app) {
+  return {app.tablet_x, app.tablet_y, app.tablet_width, app.tablet_height,
+          app.tablet_rotation};
+}
+
 void update_tablet_mapping(App& app) {
-  app.pen.mapping =
-      tablet_mapping({app.tablet_x, app.tablet_y, app.tablet_width,
-                      app.tablet_height, app.tablet_rotation});
+  app.pen.mapping = tablet_mapping(tablet_area(app));
 }
 
 void set_tablet_area(App& app, const TabletArea& area) {
@@ -927,6 +934,15 @@ bool import_tablet_settings(App& app) {
   app.tablet_area_set = true;
   save_settings(app);
   return true;
+}
+
+std::string tablet_area_warning(const App& app) {
+  const TabletModel* tablet = connected_tablet();
+  const TabletArea   area = tablet_area(app);
+  if (!tablet || fit_area(area, *tablet) == area)
+    return {};
+  return std::string("the area goes past the ") + tablet->name +
+         "'s edge, so part of the screen is out of reach (Ctrl+O to fit it)";
 }
 
 void set_pen_direct(App& app, bool on) {
@@ -1003,6 +1019,7 @@ bool app_init(App& app) {
   app.tablet_tip = settings.tablet_tip;
   app.tablet_area_set = settings.tablet_area_set;
   set_tablet_area(app, settings.tablet_area);
+  app.tablet_profiles = settings.tablet_profiles;
   if (settings.pen_direct)
     set_pen_direct(app, true);
   set_master_volume(app.audio, settings.volume);
@@ -1227,8 +1244,9 @@ void app_key(App& app, i32 key, i32 action) {
 }
 
 void app_char(App& app, u32 codepoint) {
-  if (accepting_input(app) && !app.settings_menu.open &&
-      app.screen == Screen::SongSelect)
+  if (app.settings_menu.open)
+    settings_char(app, codepoint);
+  else if (accepting_input(app) && app.screen == Screen::SongSelect)
     select_char(app, codepoint);
 }
 
@@ -1394,6 +1412,13 @@ void save_settings(const App& app) {
     file << "tablet_area=" << app.tablet_x << ' ' << app.tablet_y << ' '
          << app.tablet_width << ' ' << app.tablet_height << ' '
          << app.tablet_rotation << '\n';
+  for (size_t i = 0; i < app.tablet_profiles.size(); ++i) {
+    const auto& [name, area] = app.tablet_profiles[i];
+    if (!name.empty())
+      file << "tablet_profile_" << i + 1 << '=' << area.x << ' ' << area.y
+           << ' ' << area.width << ' ' << area.height << ' ' << area.rotation
+           << ' ' << name << '\n';
+  }
   file << "readout=" << app.readout.mode << '\n';
 }
 
