@@ -515,6 +515,12 @@ void show_toast(App& app, std::string text, f64 seconds = kToastSeconds);
 void change_audio_offset(App& app, f64 ms);
 // Switches to skins[index], or the built-in look for -1, and saves the choice.
 void use_skin(App& app, i32 index);
+// Steps through the built-in look and each skin, one forward (1) or back
+// (-1), picking up skins added while the game runs (F9, and settings), and
+// says which.
+void step_skin(App& app, i32 step);
+// The skin in use, by its own name, or "built-in".
+std::string skin_name(const App& app);
 // osu! lays out its interface for a 768-point-tall window; skin images for
 // it scale by this.
 inline f32 ui_scale(const App& app) {

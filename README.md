@@ -219,10 +219,10 @@ every osu!standard difficulty is listed; other modes are skipped.
 
 Put osu! skins (`.osk` files or skin folders) in `skins/`, or drop `.osk`
 files on the window, on the main menu or in song select. A newly added or
-dropped skin becomes active; F9 cycles through the skins and the built-in
-look. Skins cover gameplay: hit objects, cursor, judgements, score digits,
-health bar, grades and hitsounds. Elements a skin leaves out keep the
-built-in look.
+dropped skin becomes active. F9, or **Skin** in settings (Ctrl+O), steps
+through the skins and the built-in look. Skins cover gameplay: hit objects,
+cursor, judgements, score digits, health bar, grades and hitsounds.
+Elements a skin leaves out keep the built-in look.
 
 ## Replays
 
