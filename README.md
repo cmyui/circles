@@ -31,9 +31,10 @@ such as Input Monitoring.
 ## Build and run
 
 macOS only: rendering uses Metal. Needs CMake and Apple's command line
-tools (`xcode-select --install`, then `brew install cmake`). GLFW is built
-from `third_party/`, and replays' LZMA compression uses macOS's own
-liblzma.
+tools (`xcode-select --install`, then `brew install cmake`). The first build
+downloads GLFW, built into the app, and liblzma's headers (replays' LZMA
+compression uses macOS's own liblzma) into `build/_deps`, where later
+builds find them.
 
 ```sh
 make run     # build into build/ and start the game
