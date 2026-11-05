@@ -172,19 +172,23 @@ Samples metal(f32 seconds, f32 scale) {
 }
 
 // A flat, drum-like hit: noise through a band twice, so no pitch stands
-// out, dying by e every `tau`, over a little low noise for a thump.
+// out, dying by e every `tau`, over a little low noise for a thump. The
+// second filter takes about a millisecond to build up, so the noise through
+// just the first starts the hit at once, gone within a few milliseconds.
 Samples drum_hit(f32 seconds, f32 centre, f32 q, f32 tau, f32 thump_tau,
                  u32 seed) {
   const Samples thump =
       filtered(noise(seconds, seed + 1), Filter::Lowpass, 300);
+  const Samples once =
+      filtered(noise(seconds, seed), Filter::Bandpass, centre, q);
   size_t i = 0;
-  return shaped(filtered(filtered(noise(seconds, seed), Filter::Bandpass,
-                                  centre, q),
-                         Filter::Bandpass, centre, q),
+  return shaped(filtered(once, Filter::Bandpass, centre, q),
                 [&](f32 t, f32 band) {
-                  return (band * decay(t, tau) +
-                          0.4f * thump[i++] * decay(t, thump_tau)) *
-                         attack(t, 0.0005f);
+                  const f32 out = band * decay(t, tau) +
+                                  once[i] * decay(t, 0.0008f) +
+                                  0.4f * thump[i] * decay(t, thump_tau);
+                  ++i;
+                  return out;
                 });
 }
 
