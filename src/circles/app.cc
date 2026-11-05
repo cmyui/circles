@@ -187,16 +187,6 @@ std::string refresh_skins(App& app) {
   return imported.empty() ? std::string() : imported.back().filename().string();
 }
 
-// F9 steps through the built-in look and each skin, picking up skins added
-// while the game runs.
-void cycle_skin(App& app) {
-  refresh_skins(app);
-  const i32 next = app.skin_index + 1;
-  use_skin(app, next < static_cast<i32>(app.skins.size()) ? next : -1);
-  show_toast(app, "Skin: " + (app.skin_index < 0 ? std::string("built-in")
-                                                 : app.skin.config.name));
-}
-
 void change_volume(App& app, f64 notches) {
   set_master_volume(app.audio, app.audio.master_volume +
                                    static_cast<f32>(notches) * kVolumeStep);
@@ -1299,7 +1289,7 @@ void app_key(App& app, i32 key, i32 action) {
   // Loading a skin takes a moment, so not mid-map.
   if (key == GLFW_KEY_F9 && action == GLFW_PRESS &&
       app.screen != Screen::Gameplay) {
-    cycle_skin(app);
+    step_skin(app, 1);
     return;
   }
   // The audio offset is set while listening: on the main menu or mid-map.
@@ -1559,6 +1549,18 @@ void change_audio_offset(App& app, f64 ms) {
            "Audio offset %+.0f ms, plus %.0f ms output delay", app.audio_offset,
            app.audio.output_latency);
   show_toast(app, text);
+}
+
+void step_skin(App& app, i32 step) {
+  refresh_skins(app);
+  // The built-in look is -1, before the first skin.
+  const i32 count = static_cast<i32>(app.skins.size()) + 1;
+  use_skin(app, (app.skin_index + 1 + step + count) % count - 1);
+  show_toast(app, "Skin: " + skin_name(app));
+}
+
+std::string skin_name(const App& app) {
+  return app.skin_index < 0 ? "built-in" : app.skin.config.name;
 }
 
 void use_skin(App& app, i32 index) {

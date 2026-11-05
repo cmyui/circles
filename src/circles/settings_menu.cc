@@ -5,7 +5,8 @@
 //   loop is capped at 1000 updates per second; the frame limiter, whether
 //   full screen frames wait for the display's refresh or show as soon as
 //   drawn, where they can tear; whether maps' own combo colours replace the
-//   skin's; and opening the game folder, for adding skins.
+//   skin's; the skin (also F9); and opening the game folder, for adding
+//   skins.
 // - Tablet: whether circles reads the pen itself (also F5); whether its area
 //   maps onto the whole display or the window; the area; the tip's pressure
 //   that clicks; fitting the area onto the connected tablet, and importing
@@ -39,6 +40,10 @@ struct RowSpec {
   bool App::* choice = nullptr;
   i32 App::*                   option = nullptr;  // an index into names
   std::span<const char* const> names;
+  // Instead of an index into names, a choice shown by name and stepped
+  // through by its own function.
+  std::string (*shown)(const App&) = nullptr;
+  void (*step_by)(App&, i32) = nullptr;
   // What follows a change to the row; all a button does.
   void (*changed)(App&) = nullptr;
   bool half = false;  // half a line; half rows come in pairs
@@ -58,6 +63,7 @@ enum Row : i32 {
   kCapUpdateFrequencyRow,
   kFrameLimiterRow,
   kComboColourRow,
+  kSkinRow,
   kOpenFolderRow,
   kPenRow,
   kFullScreenRow,
@@ -132,6 +138,7 @@ constexpr RowSpec kRows[kRowCount] = {
      .names = kFrameLimiterNames,
      .changed = apply_frame_limiter},
     {.label = "Beatmap combo colours", .choice = &App::beatmap_colours},
+    {.label = "Skin", .shown = skin_name, .step_by = step_skin},
     {.label = "Open game folder", .changed = open_game_folder},
     {.label = "Read the pen directly (F5)",
      .page = kTablet,
@@ -394,6 +401,8 @@ void use_row(App& app, i32 row, i32 step = 1) {
     i32&      option = app.*spec.option;
     option = (option + step + count) % count;
   }
+  if (spec.step_by)
+    spec.step_by(app, step);
   if (spec.slot >= 0)
     use_profile(app, spec.slot);
   if (spec.changed)
@@ -443,7 +452,7 @@ void settings_key(App& app, i32 key, i32 action) {
                              0, kProfileActionCount - 1);
   } else if (!spec.number && press &&
              (key == GLFW_KEY_ENTER || key == GLFW_KEY_SPACE ||
-              ((spec.choice || spec.option) &&
+              ((spec.choice || spec.option || spec.step_by) &&
                (key == GLFW_KEY_LEFT || key == GLFW_KEY_RIGHT)))) {
     use_row(app, menu.selected, key == GLFW_KEY_LEFT ? -1 : 1);
   }
@@ -600,12 +609,15 @@ void settings_draw(App& app) {
       }
       continue;
     }
-    if (spec.option) {
+    if (spec.option || spec.shown) {
       const f32 baseline = centered_baseline(app.bold, 17, centre);
       draw_text(r, app.bold, spec.label, box.x + 16, baseline, 17,
                 fade(kWhite, appear));
-      draw_text(r, app.bold, spec.names[app.*spec.option], box.x + box.w - 16,
-                baseline, 17, fade(kWhite, 0.85f * appear), Align::Right);
+      const std::string value =
+          spec.option ? spec.names[app.*spec.option] : spec.shown(app);
+      draw_text(r, app.bold, fit_text(app.bold, value, 17, box.w * 0.6f),
+                box.x + box.w - 16, baseline, 17, fade(kWhite, 0.85f * appear),
+                Align::Right);
       continue;
     }
     if (!spec.choice) {
