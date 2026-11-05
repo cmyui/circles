@@ -211,8 +211,7 @@ void menu_draw(App& app) {
   }
   const std::string footer =
       app.library.maps.empty()
-          ? "No beatmaps yet: put .osz files or beatmap folders in beatmaps/ "
-            "and restart"
+          ? "No beatmaps yet: drop .osz files on the window"
           : std::to_string(app.library.maps.size()) + " beatmaps in " +
                 std::to_string(app.library.sets.size()) + " sets";
   draw_text_shadowed(r, app.regular, footer, 20, app.height - 20, 15,

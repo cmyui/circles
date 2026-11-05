@@ -3,6 +3,7 @@
 #include <chrono>
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
 #include <memory>
 #include <string>
 
@@ -18,8 +19,9 @@ circles::App& app_of(GLFWwindow* window) {
 // profiling and exits at its results, saving the profile to perf/; given a
 // .osu, it watches Auto play the map.
 // `--size WxH` sets the window, and `--uncapped` lifts the cap on game loop
-// passes. `--working-dir DIR` runs in DIR, which holds shaders/, beatmaps/
-// and settings.txt: macOS starts an opened app in /.
+// passes. `--working-dir DIR` runs in DIR, which holds beatmaps/, skins/,
+// replays/ and settings.txt; without it, the game runs in its game folder,
+// made if need be (macOS starts an opened app in /).
 struct Options {
   std::string working_dir;
   std::string benchmark;
@@ -57,7 +59,12 @@ int main(int argc, char** argv) {
   Options options;
   if (!parse_options(argc, argv, options))
     return 2;
-  if (!options.working_dir.empty() && chdir(options.working_dir.c_str()) != 0) {
+  if (options.working_dir.empty()) {
+    options.working_dir = circles::game_folder();
+    std::error_code error;
+    std::filesystem::create_directories(options.working_dir, error);
+  }
+  if (chdir(options.working_dir.c_str()) != 0) {
     std::perror(options.working_dir.c_str());
     return 2;
   }

@@ -10,10 +10,30 @@ windows, slider and spinner scoring, combo, health, and score are ported
 here. Plays score as they would there, and stable replays play back with
 the same judgements.
 
+## Play
+
+circles runs on Macs with Apple silicon and macOS 13 or later.
+
+1. Download `circles-macos.zip` from the
+   [latest release](https://github.com/cmyui/circles/releases/latest) and
+   unzip it. Move `circles.app` to Applications.
+2. Open it. The first time, macOS stops it, as it's not from the App Store
+   or a registered developer. Open System Settings, then Privacy &
+   Security, and choose **Open Anyway** for circles.
+3. Drop `.osz` beatmap archives on its window to add maps.
+
+The game keeps beatmaps, skins, replays and settings in
+`~/Library/Application Support/circles`; **Open game folder** in its
+settings (Ctrl+O) shows it in Finder. Skins go in its `skins/` folder.
+Each new version is a new app to macOS, which asks again for permissions
+such as Input Monitoring.
+
 ## Build and run
 
-macOS only: rendering uses Metal. Needs CMake, GLFW and xz, for replays'
-LZMA compression (`brew install cmake glfw xz`).
+macOS only: rendering uses Metal. Needs CMake and Apple's command line
+tools (`xcode-select --install`, then `brew install cmake`). GLFW is built
+from `third_party/`, and replays' LZMA compression uses macOS's own
+liblzma.
 
 ```sh
 make run     # build into build/ and start the game
@@ -21,9 +41,10 @@ make test    # rule, archive, skin and replay tests
 make format  # clang-format the sources
 ```
 
-The game reads `shaders/`, `beatmaps/`, `skins/` and `replays/` from its
-working directory: `make run` opens the app with `--working-dir` set to this
-folder, and its output goes to the terminal. Quit with Cmd+Q: Ctrl+C stops
+The game reads `beatmaps/`, `skins/`, `replays/` and `settings.txt` from
+its working directory: `make run` opens the app with `--working-dir` set to
+this folder, and its output goes to the terminal. Opened any other way, it
+uses `~/Library/Application Support/circles`. Its shaders are in the app. Quit with Cmd+Q: Ctrl+C stops
 `make`, not the game. It builds as an app bundle, `build/circles.app`,
 which marks it as a game: macOS turns on Game Mode while it's full screen
 (F11), giving it priority on the CPU and GPU. Opened as an app, it's also
@@ -33,6 +54,10 @@ macOS keeps a permission such as Input Monitoring only while the app's
 signature matches. The build signs ad hoc, which changes with every build;
 to keep permissions across builds, sign with a certificate:
 `cmake -B build -DCIRCLES_SIGN_IDENTITY="Apple Development"`.
+
+GitHub Actions builds and tests every pull request and push to main. Pushing
+a version tag (`git tag v0.2.0 && git push origin v0.2.0`) also publishes a
+release with the app, signed ad hoc, as `circles-macos.zip`.
 
 ## Frames and latency
 

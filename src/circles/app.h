@@ -467,6 +467,11 @@ void toggle_fullscreen(App& app);
 // The display the window is on, in the window's points: its top-left
 // relative to the window's content, and its size.
 void window_screen(App& app, Vec2& origin, Vec2& size);
+// Where the game keeps beatmaps, skins, replays and settings unless told
+// otherwise: ~/Library/Application Support/circles. And showing a folder
+// in Finder.
+std::string game_folder();
+void        open_folder(const std::string& path);
 
 // Fades out, switches, and fades back in.
 void switch_screen(App& app, Screen screen);
