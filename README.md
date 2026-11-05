@@ -49,7 +49,9 @@ make format  # clang-format the sources
 The game reads `beatmaps/`, `skins/`, `replays/` and `settings.txt` from
 its working directory: `make run` opens the app with `--working-dir` set to
 this folder, and its output goes to the terminal. Opened any other way, it
-uses `~/Library/Application Support/circles`. Its shaders are in the app. Quit with Cmd+Q: Ctrl+C stops
+uses `~/Library/Application Support/circles`. Its shaders are in the app,
+as is its icon, `macos/circles.icns`, drawn by `tools/make_icon.py` (with
+Pillow and numpy). Quit with Cmd+Q: Ctrl+C stops
 `make`, not the game. It builds as an app bundle, `build/circles.app`,
 which marks it as a game: macOS turns on Game Mode while it's full screen
 (F11), giving it priority on the CPU and GPU. Opened as an app, it's also

@@ -94,10 +94,12 @@ target_link_libraries(circles_core PUBLIC
 
 # An app bundle, so macOS knows circles is a game: Game Mode turns on while
 # it's full screen.
-# The shaders go in its Resources, compiled when the game starts.
-add_executable(circles MACOSX_BUNDLE src/circles/main.cc shaders/circles.metal)
-set_source_files_properties(shaders/circles.metal PROPERTIES
-  MACOSX_PACKAGE_LOCATION Resources)
+# The shaders go in its Resources, compiled when the game starts, and its
+# icon.
+add_executable(circles MACOSX_BUNDLE src/circles/main.cc shaders/circles.metal
+  macos/circles.icns)
+set_source_files_properties(shaders/circles.metal macos/circles.icns
+  PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
 set_target_properties(circles PROPERTIES
   MACOSX_BUNDLE_INFO_PLIST ${PROJECT_SOURCE_DIR}/macos/Info.plist)
 target_compile_options(circles PRIVATE -Wall -Wextra)

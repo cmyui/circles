@@ -4,6 +4,9 @@
 <dict>
   <key>CFBundleExecutable</key>
   <string>circles</string>
+  <!-- Resources/circles.icns, drawn by tools/make_icon.py. -->
+  <key>CFBundleIconFile</key>
+  <string>circles</string>
   <key>CFBundleIdentifier</key>
   <string>io.github.cmyui.circles</string>
   <key>CFBundleName</key>
