@@ -643,6 +643,34 @@ void update_drain(App& app, i32 time) {
                   game.resume_after_break < 0 && !game.outro && before_stop;
 }
 
+// Judges object `index` as far as `time` has passed it: a missed head or
+// circle, a finished slider or spinner.
+void judge_passed(App& app, size_t index, i32 time) {
+  auto&             game = app.game;
+  const GameObject& object = game.objects[index];
+  auto&             state = game.states[index];
+  switch (object.kind) {
+    case ObjectKind::Slider:
+      if (object.time + game.windows.hit50 < time &&
+          state.head == Judgement::None)
+        miss_head(app, index);
+      if (object.end_time <= time && !state.hit)
+        finish_slider(app, index);
+      break;
+    case ObjectKind::Spinner:
+      if (object.end_time < time && !state.hit)
+        finish_spinner(app, index);
+      break;
+    case ObjectKind::Circle:
+      if (object.end_time + game.windows.hit50 < time && !state.hit) {
+        state.head = Judgement::Miss;
+        state.head_time = time;
+        judge_object(app, index, Judgement::Miss, object.position);
+      }
+      break;
+  }
+}
+
 }  // namespace
 
 f32 hitsound_pan(Vec2 position) {
@@ -701,6 +729,21 @@ StepOutcome play_step(App& app,
   game.stepped = true;
   game.time = time;
 
+  // Judging below looks only at objects near the time. A jump in time, as
+  // when the clock catches up with the music after the game loop stalls,
+  // can pass an object before it's judged; it's judged now, silently,
+  // rather than left on screen.
+  for (size_t i = game.first_active;
+       i < game.objects.size() && game.objects[i].time < time - game.preempt;
+       ++i) {
+    if (game.states[i].hit || game.objects[i].end_time >= time - game.preempt)
+      continue;
+    const bool muted = app.audio.effects_muted;
+    app.audio.effects_muted = true;
+    judge_passed(app, i, time);
+    app.audio.effects_muted = muted;
+  }
+
   // Input: a press is a side going down; both at once still make one.
   const bool left = keys & kLeftKeys;
   const bool right = keys & kRightKeys;
@@ -745,34 +788,12 @@ StepOutcome play_step(App& app,
 
   // Spinners turn every frame; objects whose time has passed are judged.
   for_each_near(game, time, [&](size_t i) {
-    const GameObject& object = game.objects[i];
-    const auto&       state = game.states[i];
-    if (object.kind == ObjectKind::Spinner)
+    if (game.objects[i].kind == ObjectKind::Spinner)
       turn_spinner(app, i, time, elapsed);
-    else if (object.kind == ObjectKind::Slider)
+    else if (game.objects[i].kind == ObjectKind::Slider)
       sound_slider(app, i, time);
-    if (!judging)
-      return true;
-    switch (object.kind) {
-      case ObjectKind::Slider:
-        if (object.time + game.windows.hit50 < time &&
-            state.head == Judgement::None)
-          miss_head(app, i);
-        if (object.end_time <= time && !state.hit)
-          finish_slider(app, i);
-        break;
-      case ObjectKind::Spinner:
-        if (object.end_time < time && !state.hit)
-          finish_spinner(app, i);
-        break;
-      case ObjectKind::Circle:
-        if (object.end_time + game.windows.hit50 < time && !state.hit) {
-          game.states[i].head = Judgement::Miss;
-          game.states[i].head_time = time;
-          judge_object(app, i, Judgement::Miss, object.position);
-        }
-        break;
-    }
+    if (judging)
+      judge_passed(app, i, time);
     return true;
   });
 

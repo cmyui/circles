@@ -87,7 +87,7 @@ add_custom_command(TARGET circles POST_BUILD
 
 if(BUILD_TESTING)
   set(_tests rules archive skin hitsounds md5 replay stretch mods hit_objects
-  slider_body tablet)
+  slider_body tablet judging)
   set(_test_targets)
   foreach(name IN LISTS _tests)
     list(APPEND _test_targets test_${name})
