@@ -16,6 +16,10 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v5
+      # Released apps are circles, io.github.cmyui.circles; others are dev.
+      - run: >
+          cmake -S . -B build -DCIRCLES_BUNDLE_ID=io.github.cmyui.circles
+          -DCIRCLES_BUNDLE_NAME=circles
       - run: make build
       - run: make test
       - name: Release

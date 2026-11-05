@@ -55,9 +55,13 @@ which marks it as a game: macOS turns on Game Mode while it's full screen
 (F11), giving it priority on the CPU and GPU. Opened as an app, it's also
 circles, not the terminal, that macOS asks for permissions.
 
-macOS keeps a permission such as Input Monitoring only while the app's
-signature matches. The build signs ad hoc, which changes with every build;
-to keep permissions across builds, sign with a certificate:
+macOS keeps a permission such as Input Monitoring per app, by its bundle ID,
+and only while the app's signature matches. A build from source is
+**circles dev** (`io.github.cmyui.circles.dev`), a different app to macOS
+from an installed release (**circles**, `io.github.cmyui.circles`), so the
+two keep their own permissions; with no `--working-dir`, they share the game
+folder. The build signs ad hoc, which changes with every build; to keep
+permissions across builds, sign with a certificate:
 `cmake -B build -DCIRCLES_SIGN_IDENTITY="Apple Development"`.
 
 GitHub Actions builds and tests every pull request and push to main. A
