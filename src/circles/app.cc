@@ -462,21 +462,42 @@ void draw_profiler_overlay(App& app) {
             fade(kWhite, 0.8f));
 }
 
+// Copies a file the player dropped into `folder`, unless it's already there.
+void copy_dropped(const std::filesystem::path& source, const char* folder) {
+  namespace fs = std::filesystem;
+  std::error_code error;
+  const fs::path  destination = fs::path(folder) / source.filename();
+  if (!fs::equivalent(source, destination, error))
+    fs::copy_file(source, destination, fs::copy_options::skip_existing, error);
+}
+
+// Imports the skins the player dropped and switches to the last; dropping one
+// already imported switches to it.
+void import_dropped_skins(App& app) {
+  std::string name;  // the last skin's, as its folder is named
+  for (const auto& path : app.dropped_skins) {
+    copy_dropped(path, kSkinDirectory);
+    name = std::filesystem::path(path).stem().string();
+  }
+  app.dropped_skins.clear();
+  refresh_skins(app);
+  const i32 index = skin_index_of(app, name);
+  if (index < 0) {
+    show_toast(app, "Not a valid .osk skin");
+    return;
+  }
+  use_skin(app, index);
+  show_toast(app, "Skin: " + app.skin.config.name);
+}
+
 // Imports archives the player dropped, selecting the first, and starter
 // beatmaps saved into beatmaps/, quietly, keeping the selection if there is
 // one. Rescanning renumbers the library's maps, so it waits until no screen
 // holds one: the main menu or song select.
 void import_archives_waiting(App& app) {
   namespace fs = std::filesystem;
-  std::error_code error;
-  for (const auto& path : app.dropped) {
-    const fs::path source(path);
-    const fs::path destination =
-        fs::path(kBeatmapDirectory) / source.filename();
-    if (!fs::equivalent(source, destination, error))
-      fs::copy_file(source, destination, fs::copy_options::skip_existing,
-                    error);
-  }
+  for (const auto& path : app.dropped)
+    copy_dropped(path, kBeatmapDirectory);
   const bool dropped = !app.dropped.empty();
   app.dropped.clear();
   app.starters.waiting = false;
@@ -1141,10 +1162,13 @@ void app_update(App& app, f64 now) {
       starters.finished.reset();
     }
   }
-  if ((!app.dropped.empty() || app.starters.waiting) &&
-      app.transition_started < 0 &&
-      (app.screen == Screen::MainMenu || app.screen == Screen::SongSelect))
-    import_archives_waiting(app);
+  if (app.transition_started < 0 &&
+      (app.screen == Screen::MainMenu || app.screen == Screen::SongSelect)) {
+    if (!app.dropped_skins.empty())
+      import_dropped_skins(app);
+    if (!app.dropped.empty() || app.starters.waiting)
+      import_archives_waiting(app);
+  }
   for (auto* trail : {&app.trail, &app.game.replay_trail})
     while (!trail->empty() && now - trail->front().time > kTrailLength)
       trail->pop_front();
@@ -1341,13 +1365,18 @@ void app_cursor(App& app, f64 x, f64 y) {
 void app_drop(App& app, std::span<const char* const> paths) {
   size_t queued = 0;
   for (const char* path : paths) {
-    if (lowercase(std::filesystem::path(path).extension().string()) != ".osz")
+    const std::string extension =
+        lowercase(std::filesystem::path(path).extension().string());
+    if (extension == ".osz")
+      app.dropped.emplace_back(path);
+    else if (extension == ".osk")
+      app.dropped_skins.emplace_back(path);
+    else
       continue;
-    app.dropped.emplace_back(path);
     ++queued;
   }
   if (!queued)
-    show_toast(app, "Drop .osz beatmap archives to import them");
+    show_toast(app, "Drop .osz beatmaps or .osk skins to import them");
   else if (app.screen == Screen::Gameplay || app.screen == Screen::Results)
     show_toast(app, "Importing once you're back at song select");
 }

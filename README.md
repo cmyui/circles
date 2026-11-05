@@ -27,7 +27,8 @@ circles runs on Macs with Apple silicon and macOS 13 or later.
 
 The game keeps beatmaps, skins, replays and settings in
 `~/Library/Application Support/circles`; **Open game folder** in its
-settings (Ctrl+O) shows it in Finder. Skins go in its `skins/` folder.
+settings (Ctrl+O) shows it in Finder. Drop `.osk` skins on the window to
+add and switch to them, or put skin folders in its `skins/` folder.
 Each new version is a new app to macOS, which asks again for permissions
 such as Input Monitoring.
 
@@ -209,10 +210,12 @@ every osu!standard difficulty is listed; other modes are skipped.
 
 ## Skins
 
-Put osu! skins (`.osk` files or skin folders) in `skins/`. A newly added
-skin becomes active; F9 cycles through the skins and the built-in look. Skins
-cover gameplay: hit objects, cursor, judgements, score digits, health bar,
-grades and hitsounds. Elements a skin leaves out keep the built-in look.
+Put osu! skins (`.osk` files or skin folders) in `skins/`, or drop `.osk`
+files on the window, on the main menu or in song select. A newly added or
+dropped skin becomes active; F9 cycles through the skins and the built-in
+look. Skins cover gameplay: hit objects, cursor, judgements, score digits,
+health bar, grades and hitsounds. Elements a skin leaves out keep the
+built-in look.
 
 ## Replays
 
