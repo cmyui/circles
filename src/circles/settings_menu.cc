@@ -55,7 +55,7 @@ constexpr size_t      kNameLength = 12;
 enum Row : i32 {
   kDimRow,
   kCursorRow,
-  kFrameCapRow,
+  kCapUpdateFrequencyRow,
   kFrameLimiterRow,
   kComboColourRow,
   kOpenFolderRow,
@@ -124,7 +124,8 @@ constexpr RowSpec kRows[kRowCount] = {
      .number = &App::cursor_size,
      .min = 0.1f,
      .max = 2},
-    {.label = "Cap updates at 1000 per second", .choice = &App::frame_cap},
+    {.label = "Cap updates at 1000 per second",
+     .choice = &App::cap_update_frequency},
     // All but VSync show frames the moment they're drawn, which can tear.
     {.label = "Frame limiter",
      .option = &App::frame_limiter,

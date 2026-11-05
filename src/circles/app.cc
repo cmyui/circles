@@ -75,7 +75,7 @@ struct Settings {
   bool        mouse_buttons = true;
   Mods        mods = 0;
   f32         background_dim = 1;
-  bool        frame_cap = true;
+  bool        cap_update_frequency = false;
   i32         frame_limiter = 4;  // unlimited
   f32         cursor_size = 1;
   bool        beatmap_colours = false;
@@ -108,8 +108,9 @@ Settings load_settings() {
       settings.mouse_buttons = std::strtol(value, nullptr, 10) != 0;
     else if (key == "mods")
       settings.mods = static_cast<Mods>(std::strtoul(value, nullptr, 10));
-    else if (key == "frame_cap")
-      settings.frame_cap = std::strtol(value, nullptr, 10) != 0;
+    // frame_cap is its older name.
+    else if (key == "cap_update_frequency" || key == "frame_cap")
+      settings.cap_update_frequency = std::strtol(value, nullptr, 10) != 0;
     else if (key == "frame_limiter") {
       for (i32 i = 0; i < static_cast<i32>(std::size(kFrameLimiters)); ++i)
         if (!std::strcmp(value, kFrameLimiters[i]))
@@ -1062,7 +1063,7 @@ bool app_init(App& app) {
   app.mouse_buttons = settings.mouse_buttons;
   app.mods = settings.mods;
   app.background_dim = settings.background_dim;
-  app.frame_cap = settings.frame_cap;
+  app.cap_update_frequency = settings.cap_update_frequency;
   app.frame_limiter = settings.frame_limiter;
   apply_frame_limiter(app);
   app.cursor_size = settings.cursor_size;
@@ -1497,7 +1498,7 @@ void save_settings(const App& app) {
   file << "mouse_buttons=" << app.mouse_buttons << '\n';
   file << "mods=" << app.mods << '\n';
   file << "background_dim=" << app.background_dim << '\n';
-  file << "frame_cap=" << app.frame_cap << '\n';
+  file << "cap_update_frequency=" << app.cap_update_frequency << '\n';
   file << "frame_limiter=" << kFrameLimiters[app.frame_limiter] << '\n';
   file << "cursor_size=" << app.cursor_size << '\n';
   file << "beatmap_colours=" << app.beatmap_colours << '\n';

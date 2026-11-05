@@ -106,14 +106,15 @@ int main(int argc, char** argv) {
     return 1;
   }
 
-  // The game loop runs up to 1000 times per second, sleeping between passes
-  // rather than spinning a core, unless the cap is turned off in settings
-  // (or for a benchmark, --uncapped). Each pass handles input and advances
+  // The game loop runs as often as it can, for the least latency, unless
+  // the cap is turned on in settings: then up to 1000 times per second,
+  // sleeping between passes rather than spinning a core (--uncapped lifts it
+  // for a benchmark). Each pass handles input and advances
   // the game; it draws when gpu_frame_due says, and in full screen the loop
   // wakes early when the display frees a buffer. Presses are judged by their
   // own timestamps, so the loop's rate doesn't limit their precision.
   if (options.uncapped)
-    app->frame_cap = false;
+    app->cap_update_frequency = false;
   using Clock = std::chrono::steady_clock;
   auto  next_update = Clock::now();
   auto& profiler = app->profiler;
@@ -126,7 +127,8 @@ int main(int argc, char** argv) {
     circles::app_update(*app, glfwGetTime());
     circles::profile_phase(profiler, FramePhase::Update);
     const bool draw = circles::gpu_frame_due() && circles::app_draw(*app);
-    next_update += std::chrono::microseconds(app->frame_cap ? 1000 : 0);
+    next_update +=
+        std::chrono::microseconds(app->cap_update_frequency ? 1000 : 0);
     const auto now = Clock::now();
     if (next_update > now)
       circles::gpu_sleep_until(next_update);
