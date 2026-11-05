@@ -4,6 +4,9 @@
 <dict>
   <key>CFBundleExecutable</key>
   <string>circles</string>
+  <!-- Resources/circles.icns, drawn by tools/make_icon.py. -->
+  <key>CFBundleIconFile</key>
+  <string>circles</string>
   <!-- From CMake: CIRCLES_BUNDLE_ID and CIRCLES_BUNDLE_NAME. -->
   <key>CFBundleIdentifier</key>
   <string>${MACOSX_BUNDLE_GUI_IDENTIFIER}</string>
