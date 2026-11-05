@@ -209,11 +209,19 @@ void menu_draw(App& app) {
                                 app.width * 0.5f),
                        app.width - 20, 56, 18, kWhite, Align::Right);
   }
-  const std::string footer =
+  std::string footer =
       app.library.maps.empty()
           ? "No beatmaps yet: drop .osz files on the window"
           : std::to_string(app.library.maps.size()) + " beatmaps in " +
                 std::to_string(app.library.sets.size()) + " sets";
+  if (const auto& starters = app.starters; starters.finished) {
+    const std::string count = std::to_string(starters.finished->load()) +
+                              " of " + std::to_string(starters.paths.size()) +
+                              " sets";
+    footer = app.library.maps.empty()
+                 ? "Downloading starter beatmaps: " + count
+                 : footer + "  ·  downloading starter beatmaps, " + count;
+  }
   draw_text_shadowed(r, app.regular, footer, 20, app.height - 20, 15,
                      fade(kWhite, 0.8f));
   char offset[128];

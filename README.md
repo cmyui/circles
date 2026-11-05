@@ -20,7 +20,10 @@ circles runs on Macs with Apple silicon and macOS 13 or later.
 2. Open it. The first time, macOS stops it, as it's not from the App Store
    or a registered developer. Open System Settings, then Privacy &
    Security, and choose **Open Anyway** for circles.
-3. Drop `.osz` beatmap archives on its window to add maps.
+3. With no beatmaps, it downloads nine starter sets, about 50 MB, from
+   cmyui.xyz: songs licensed to osu! (Featured Artists). They download
+   smallest first and each is playable once it's in. Drop `.osz` beatmap
+   archives on its window to add more.
 
 The game keeps beatmaps, skins, replays and settings in
 `~/Library/Application Support/circles`; **Open game folder** in its
@@ -72,15 +75,15 @@ the display depends on the window:
 - Full screen (F11), frames skip the compositor and go straight to the
   display. How is the frame limiter's choice (F7 steps through them, or
   settings, Ctrl+O):
-  - **VSync**, the default: one frame per refresh, shown whole. Each is drawn
+  - **VSync**: one frame per refresh, shown whole. Each is drawn
     as soon as the display frees a buffer and shows at the next refresh,
     about one refresh after its drawing starts.
-  - **2x, 4x or 8x refresh, or Unlimited**: frames are drawn up to that many
-    times per refresh (Unlimited, as often as the game loop runs) and each
-    shows the moment it's drawn, from wherever the display is in drawing the
-    screen. That's a couple of ms after its drawing starts rather than a
-    refresh, but a moving image can split where a new frame replaces the
-    last (tearing), and the GPU does several times the work.
+  - **2x, 4x or 8x refresh, or Unlimited**, the default: frames are drawn
+    up to that many times per refresh (Unlimited, as often as the game loop
+    runs) and each shows the moment it's drawn, from wherever the display is
+    in drawing the screen. That's a couple of ms after its drawing starts
+    rather than a refresh, but a moving image can split where a new frame
+    replaces the last (tearing), and the GPU does several times the work.
 
   Windowed, the limit caps how many frames are drawn per refresh; the
   compositor still shows them whole.
