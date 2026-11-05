@@ -4,10 +4,11 @@
 <dict>
   <key>CFBundleExecutable</key>
   <string>circles</string>
+  <!-- From CMake: CIRCLES_BUNDLE_ID and CIRCLES_BUNDLE_NAME. -->
   <key>CFBundleIdentifier</key>
-  <string>io.github.cmyui.circles</string>
+  <string>${MACOSX_BUNDLE_GUI_IDENTIFIER}</string>
   <key>CFBundleName</key>
-  <string>circles</string>
+  <string>${MACOSX_BUNDLE_BUNDLE_NAME}</string>
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleInfoDictionaryVersion</key>
