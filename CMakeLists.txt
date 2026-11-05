@@ -92,6 +92,14 @@ target_link_libraries(circles_core PUBLIC
   "-framework Metal" "-framework QuartzCore" "-framework IOSurface"
   "-framework IOKit")
 
+# macOS knows the app by its bundle ID, and keeps permissions such as Input
+# Monitoring per ID. Builds from source are "circles dev", so they and an
+# installed release are two apps with their own permissions; releases (CI)
+# pass the release's ID and name.
+set(CIRCLES_BUNDLE_ID "io.github.cmyui.circles.dev" CACHE STRING
+  "The app's bundle ID")
+set(CIRCLES_BUNDLE_NAME "circles dev" CACHE STRING "The app's name")
+
 # An app bundle, so macOS knows circles is a game: Game Mode turns on while
 # it's full screen.
 # Its Resources hold the shaders, compiled when the game starts, and its
@@ -101,7 +109,9 @@ add_executable(circles MACOSX_BUNDLE src/circles/main.cc shaders/circles.metal
 set_source_files_properties(shaders/circles.metal macos/circles.icns
   PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
 set_target_properties(circles PROPERTIES
-  MACOSX_BUNDLE_INFO_PLIST ${PROJECT_SOURCE_DIR}/macos/Info.plist)
+  MACOSX_BUNDLE_INFO_PLIST ${PROJECT_SOURCE_DIR}/macos/Info.plist
+  MACOSX_BUNDLE_GUI_IDENTIFIER ${CIRCLES_BUNDLE_ID}
+  MACOSX_BUNDLE_BUNDLE_NAME ${CIRCLES_BUNDLE_NAME})
 target_compile_options(circles PRIVATE -Wall -Wextra)
 target_link_libraries(circles PRIVATE circles_core)
 # Permissions macOS grants the app, such as Input Monitoring, last while its
