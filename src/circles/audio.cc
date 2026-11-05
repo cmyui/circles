@@ -671,7 +671,8 @@ void play_sound(Audio& audio, Sound sound, f32 volume, f32 pan) {
 }
 
 void audio_spectrum(Audio& audio, f32* bands, i32 band_count) {
-  constexpr i32     kSize = 1024;
+  // 23 Hz per bin, fine enough that the lowest bands differ.
+  constexpr i32     kSize = 2048;
   std::complex<f32> data[kSize];
   const u32         end = audio.scope_write.load(std::memory_order_acquire);
   for (i32 i = 0; i < kSize; ++i) {
@@ -693,9 +694,10 @@ void audio_spectrum(Audio& audio, f32* bands, i32 band_count) {
     f32       peak = 0;
     for (i32 k = k0; k <= k1; ++k)
       peak = std::max(peak, std::abs(data[k]));
-    // Loudness is perceived logarithmically: map about -40..+10 dB to 0..1.
-    bands[b] =
-        std::clamp((20 * std::log10(peak + 1e-6f) + 40) / 50, 0.0f, 1.0f);
+    // A sine of amplitude A peaks at A * kSize / 4 through the Hann window.
+    const f32 dbfs = 20 * std::log10(peak * 4 / kSize + 1e-9f);
+    const f32 tilt = 3 * std::log2(std::sqrt(f0 * f1) / 1000);
+    bands[b] = std::clamp((dbfs + tilt + 45) / 30, 0.0f, 1.0f);
   }
 }
 

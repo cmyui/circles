@@ -120,8 +120,8 @@ struct Audio {
   std::vector<f64>     sound_starts;
 
   // A mono copy of the latest output for the visualizer, written by the audio
-  // thread.
-  static constexpr u32 kScopeSize = 2048;
+  // thread; twice what the spectrum reads, so writing doesn't reach it.
+  static constexpr u32 kScopeSize = 4096;
   f32                  scope[kScopeSize] = {};
   std::atomic<u32>     scope_write{0};
 };
@@ -167,8 +167,11 @@ void set_master_volume(Audio& audio, f32 volume);
 // `pan` is -1 (left) to 1 (right).
 void play_sound(Audio& audio, Sound sound, f32 volume, f32 pan = 0);
 
-// Loudness of the latest output in log-spaced bands from bass to treble, each
-// roughly 0 to 1.
+// Loudness of the latest output in log-spaced bands from bass to treble, 0 to
+// 1: each band's level in dB of full scale, raised 3 dB per octave above
+// 1 kHz (and lowered below) as music is about that much louder in the bass,
+// from -45 dB (0) to -15 dB (1). On songs, bass and treble then move alike,
+// and rarely reach 1.
 void audio_spectrum(Audio& audio, f32* bands, i32 band_count);
 
 }  // namespace circles
