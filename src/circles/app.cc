@@ -8,6 +8,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <ctime>
 #include <filesystem>
 #include <fstream>
@@ -35,6 +36,12 @@ constexpr f64 kToastDuration = 2.5;
 constexpr f32 kVolumeStep = 0.05f;  // per scroll wheel notch
 constexpr f32 kTau = 6.2831853f;
 
+// The frame limiter's settings, as settings.txt names them, and frames per
+// refresh without vsync for each.
+constexpr const char* kFrameLimiters[] = {"vsync", "2x", "4x", "8x",
+                                          "unlimited"};
+constexpr i32         kFramesPerRefresh[] = {0, 2, 4, 8, 0};
+
 // Saved preferences, as written by save_settings.
 struct Settings {
   f64         audio_offset = 0;
@@ -44,6 +51,7 @@ struct Settings {
   Mods        mods = 0;
   f32         background_dim = 0.8f;
   bool        frame_cap = true;
+  i32         frame_limiter = 0;
   f32         cursor_size = 1;
   bool        beatmap_colours = true;
   i32         readout = 1;  // Readout::mode
@@ -76,6 +84,11 @@ Settings load_settings() {
       settings.mods = static_cast<Mods>(std::strtoul(value, nullptr, 10));
     else if (key == "frame_cap")
       settings.frame_cap = std::strtol(value, nullptr, 10) != 0;
+    else if (key == "frame_limiter") {
+      for (i32 i = 0; i < static_cast<i32>(std::size(kFrameLimiters)); ++i)
+        if (!std::strcmp(value, kFrameLimiters[i]))
+          settings.frame_limiter = i;
+    }
     else if (key == "background_dim")
       settings.background_dim =
           std::clamp(static_cast<f32>(std::strtod(value, nullptr)), 0.0f, 1.0f);
@@ -925,6 +938,11 @@ void set_pen_direct(App& app, bool on) {
     show_toast(app, "Pen: read by circles");
 }
 
+void apply_frame_limiter(App& app) {
+  gpu_set_frame_limit(app.frame_limiter == 0,
+                      kFramesPerRefresh[app.frame_limiter]);
+}
+
 bool app_init(App& app) {
   if (!glfwInit())
     return false;
@@ -953,6 +971,8 @@ bool app_init(App& app) {
   app.mods = settings.mods;
   app.background_dim = settings.background_dim;
   app.frame_cap = settings.frame_cap;
+  app.frame_limiter = settings.frame_limiter;
+  apply_frame_limiter(app);
   app.cursor_size = settings.cursor_size;
   app.beatmap_colours = settings.beatmap_colours;
   app.readout.mode = settings.readout;
@@ -1332,6 +1352,7 @@ void save_settings(const App& app) {
   file << "mods=" << app.mods << '\n';
   file << "background_dim=" << app.background_dim << '\n';
   file << "frame_cap=" << app.frame_cap << '\n';
+  file << "frame_limiter=" << kFrameLimiters[app.frame_limiter] << '\n';
   file << "cursor_size=" << app.cursor_size << '\n';
   file << "beatmap_colours=" << app.beatmap_colours << '\n';
   file << "pen_direct=" << app.pen_direct << '\n';

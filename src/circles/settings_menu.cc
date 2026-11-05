@@ -2,8 +2,10 @@
 // but in a map. Two pages, switched with Tab or by their names:
 // - General: the gameplay background dim, where 100% hides the background;
 //   the cursor's size, as osu!'s multiple of the skin's; whether the game
-//   loop is capped at 1000 updates per second; and whether maps' own combo
-//   colours replace the skin's.
+//   loop is capped at 1000 updates per second; the frame limiter, whether
+//   full screen frames wait for the display's refresh or show as soon as
+//   drawn, where they can tear; and whether maps' own combo colours replace
+//   the skin's.
 // - Tablet: whether circles reads the pen itself (also F5); whether its area
 //   maps onto the whole display or the window; the area; the tip's pressure
 //   that clicks; and importing OpenTabletDriver's area.
@@ -13,6 +15,7 @@
 #include <array>
 #include <cmath>
 #include <cstdio>
+#include <span>
 
 namespace circles {
 
@@ -21,8 +24,8 @@ namespace {
 enum Page : i32 { kGeneral, kTablet, kPageCount };
 constexpr const char* kPageNames[kPageCount] = {"General", "Tablet"};
 
-// A row sets a number with a slider or a choice with a switch, or is a
-// button.
+// A row sets a number with a slider, a choice with a switch, or one of a few
+// named options; or it's a button.
 struct RowSpec {
   const char* label;
   i32         page = kGeneral;
@@ -31,6 +34,8 @@ struct RowSpec {
   f32         step = 0.05f;  // per arrow key
   const char* format = "%.2fx";
   bool App::* choice = nullptr;
+  i32 App::*                   option = nullptr;  // an index into names
+  std::span<const char* const> names;
   // What follows a change to the row; all a button does.
   void (*changed)(App&) = nullptr;
   bool half = false;  // half a line; half rows come in pairs
@@ -40,6 +45,7 @@ enum Row : i32 {
   kDimRow,
   kCursorRow,
   kFrameCapRow,
+  kFrameLimiterRow,
   kComboColourRow,
   kPenRow,
   kFullScreenRow,
@@ -52,6 +58,10 @@ enum Row : i32 {
   kImportRow,
   kRowCount
 };
+
+// As app.frame_limiter numbers them.
+constexpr const char* kFrameLimiterNames[] = {
+    "VSync", "2x refresh", "4x refresh", "8x refresh", "Unlimited"};
 
 void pen_changed(App& app) {
   set_pen_direct(app, app.pen_direct);
@@ -76,6 +86,11 @@ constexpr RowSpec kRows[kRowCount] = {
      .min = 0.1f,
      .max = 2},
     {.label = "Cap updates at 1000 per second", .choice = &App::frame_cap},
+    // All but VSync show frames the moment they're drawn, which can tear.
+    {.label = "Frame limiter",
+     .option = &App::frame_limiter,
+     .names = kFrameLimiterNames,
+     .changed = apply_frame_limiter},
     {.label = "Beatmap combo colours", .choice = &App::beatmap_colours},
     {.label = "Read the pen directly (F5)",
      .page = kTablet,
@@ -256,12 +271,17 @@ void number_from_cursor(App& app, i32 row) {
   set_number(app, row, spec.min + t * (spec.max - spec.min));
 }
 
-// Flips a switch, or presses a button.
-void use_row(App& app, i32 row) {
+// Flips a switch, steps an option by `step`, or presses a button.
+void use_row(App& app, i32 row, i32 step = 1) {
   const RowSpec& spec = kRows[row];
   if (spec.choice) {
     bool& choice = app.*spec.choice;
     choice = !choice;
+  }
+  if (spec.option) {
+    const i32 count = static_cast<i32>(spec.names.size());
+    i32&      option = app.*spec.option;
+    option = (option + step + count) % count;
   }
   if (spec.changed)
     spec.changed(app);
@@ -303,9 +323,9 @@ void settings_key(App& app, i32 key, i32 action) {
         app.*spec.number + (key == GLFW_KEY_RIGHT ? spec.step : -spec.step));
   } else if (!spec.number && press &&
              (key == GLFW_KEY_ENTER || key == GLFW_KEY_SPACE ||
-              (spec.choice &&
+              ((spec.choice || spec.option) &&
                (key == GLFW_KEY_LEFT || key == GLFW_KEY_RIGHT)))) {
-    use_row(app, menu.selected);
+    use_row(app, menu.selected, key == GLFW_KEY_LEFT ? -1 : 1);
   }
 }
 
@@ -403,6 +423,14 @@ void settings_draw(App& app) {
     }
 
     const f32 centre = box.y + box.h / 2;
+    if (spec.option) {
+      const f32 baseline = centered_baseline(app.bold, 17, centre);
+      draw_text(r, app.bold, spec.label, box.x + 16, baseline, 17,
+                fade(kWhite, appear));
+      draw_text(r, app.bold, spec.names[app.*spec.option], box.x + box.w - 16,
+                baseline, 17, fade(kWhite, 0.85f * appear), Align::Right);
+      continue;
+    }
     if (!spec.choice) {
       // A button.
       draw_rounded_rect(

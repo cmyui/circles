@@ -16,10 +16,11 @@
   <string>0.1</string>
   <key>CFBundleVersion</key>
   <string>1</string>
-  <!-- A game category lets macOS turn on Game Mode while it's full screen. -->
+  <!-- A game category, and saying so, let macOS turn on Game Mode while it's
+       full screen. -->
   <key>LSApplicationCategoryType</key>
   <string>public.app-category.music-games</string>
-  <key>GCSupportsGameMode</key>
+  <key>LSSupportsGameMode</key>
   <true/>
   <!-- Without this a bundled app renders at half resolution on Retina. -->
   <key>NSHighResolutionCapable</key>
