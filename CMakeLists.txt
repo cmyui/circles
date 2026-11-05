@@ -94,7 +94,7 @@ target_link_libraries(circles_core PUBLIC
 
 # An app bundle, so macOS knows circles is a game: Game Mode turns on while
 # it's full screen.
-# The shaders go in its Resources, compiled when the game starts, and its
+# Its Resources hold the shaders, compiled when the game starts, and its
 # icon.
 add_executable(circles MACOSX_BUNDLE src/circles/main.cc shaders/circles.metal
   macos/circles.icns)
@@ -109,9 +109,14 @@ target_link_libraries(circles PRIVATE circles_core)
 # certificate's, such as -DCIRCLES_SIGN_IDENTITY="Apple Development", doesn't.
 set(CIRCLES_SIGN_IDENTITY "-" CACHE STRING
   "codesign identity for circles.app; - signs ad hoc")
-add_custom_command(TARGET circles POST_BUILD
+# Signed again whenever the app or a file in it changes: a resource changed
+# alone is copied in without relinking, and must be covered too.
+add_custom_command(OUTPUT circles.signed
   COMMAND codesign --force --sign "${CIRCLES_SIGN_IDENTITY}"
-    "$<TARGET_BUNDLE_DIR:circles>")
+    "$<TARGET_BUNDLE_DIR:circles>"
+  COMMAND ${CMAKE_COMMAND} -E touch circles.signed
+  DEPENDS circles shaders/circles.metal macos/circles.icns macos/Info.plist)
+add_custom_target(sign_circles ALL DEPENDS circles.signed)
 
 if(BUILD_TESTING)
   set(_tests rules archive skin hitsounds md5 replay stretch mods hit_objects
