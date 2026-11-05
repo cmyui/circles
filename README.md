@@ -59,9 +59,14 @@ signature matches. The build signs ad hoc, which changes with every build;
 to keep permissions across builds, sign with a certificate:
 `cmake -B build -DCIRCLES_SIGN_IDENTITY="Apple Development"`.
 
-GitHub Actions builds and tests every pull request and push to main. Pushing
-a version tag (`git tag v0.2.0 && git push origin v0.2.0`) also publishes a
-release with the app, signed ad hoc, as `circles-macos.zip`.
+GitHub Actions builds and tests every pull request and push to main. A
+version tag also gets the app, signed ad hoc, as `circles-macos.zip` on its
+release, a minute or two after either:
+
+- publishing a release in GitHub's UI (Releases, then Draft a new release),
+  with a new tag such as `v0.2.0` made on publish; or
+- pushing the tag (`git tag v0.2.0 && git push origin v0.2.0`), which
+  publishes the release too.
 
 ## Frames and latency
 
