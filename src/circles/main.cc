@@ -114,7 +114,7 @@ int main(int argc, char** argv) {
   // wakes early when the display frees a buffer. Presses are judged by their
   // own timestamps, so the loop's rate doesn't limit their precision.
   if (options.uncapped)
-    app->frame_cap = false;
+    app->cap_update_frequency = false;
   using Clock = std::chrono::steady_clock;
   auto  next_update = Clock::now();
   auto& profiler = app->profiler;
@@ -127,7 +127,8 @@ int main(int argc, char** argv) {
     circles::app_update(*app, glfwGetTime());
     circles::profile_phase(profiler, FramePhase::Update);
     const bool draw = circles::gpu_frame_due() && circles::app_draw(*app);
-    next_update += std::chrono::microseconds(app->frame_cap ? 1000 : 0);
+    next_update +=
+        std::chrono::microseconds(app->cap_update_frequency ? 1000 : 0);
     const auto now = Clock::now();
     if (next_update > now)
       circles::gpu_sleep_until(next_update);
