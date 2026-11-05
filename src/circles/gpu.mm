@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <cstdio>
 #include <fstream>
@@ -82,6 +83,12 @@ struct Gpu {
   id<CAMetalDrawable>                 next_drawable;
   bool                                want_drawables = false;
   bool                                stop = false;
+
+  // The frame limit: see gpu_set_frame_limit.
+  bool                                vsync = true;
+  i32                                 per_refresh = 0;
+  f64                                 refresh = 1.0 / 60;  // seconds
+  f64                                 last_draw = -1;      // when one began
 
   // The frame being recorded.
   id<MTLCommandBuffer>                commands;
@@ -241,6 +248,19 @@ void wait_for_drawables() {
   }
 }
 
+// When the frame limit next lets a frame start; 0 for any time.
+f64 limit_start() {
+  return g->vsync || g->per_refresh <= 0 || g->last_draw < 0
+             ? 0
+             : g->last_draw + g->refresh / g->per_refresh;
+}
+
+std::chrono::steady_clock::time_point steady_time(f64 media_time) {
+  return std::chrono::steady_clock::now() +
+         std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+             std::chrono::duration<f64>(media_time - CACurrentMediaTime()));
+}
+
 // Follows the window in and out of full screen. Full screen, the Metal
 // layer matches the view's pixels and the screen's colour space.
 void follow_full_screen() {
@@ -262,6 +282,8 @@ void follow_full_screen() {
     return;
   g->full_screen = full;
   g->view.layer = full ? g->metal_layer : g->surface_layer;
+  if (NSScreen* screen = g->window.screen)
+    g->refresh = screen.minimumRefreshInterval;
   {
     std::lock_guard lock(g->drawable_mutex);
     g->want_drawables = full;
@@ -385,6 +407,8 @@ bool gpu_init(GLFWwindow* window) {
   g->metal_layer.maximumDrawableCount = 2;
   g->view.layer = g->surface_layer;
   g->view.wantsLayer = YES;
+  if (NSScreen* screen = g->window.screen)
+    g->refresh = screen.minimumRefreshInterval;
 
   g->drawable_thread = std::thread(wait_for_drawables);
   return true;
@@ -424,8 +448,19 @@ void gpu_release_texture(GpuTexture* texture) {
   delete texture;
 }
 
+void gpu_set_frame_limit(bool vsync, i32 per_refresh) {
+  g->vsync = vsync;
+  g->per_refresh = per_refresh;
+  g->metal_layer.displaySyncEnabled = vsync;
+  // Without vsync, frames leave the display sooner; a third drawable keeps
+  // one free to draw into meanwhile.
+  g->metal_layer.maximumDrawableCount = vsync ? 2 : 3;
+}
+
 bool gpu_frame_due() {
   follow_full_screen();
+  if (CACurrentMediaTime() < limit_start())
+    return false;
   if (!g->full_screen)
     return true;
   std::lock_guard lock(g->drawable_mutex);
@@ -433,9 +468,13 @@ bool gpu_frame_due() {
 }
 
 void gpu_sleep_until(std::chrono::steady_clock::time_point wake) {
+  // Waking for the next frame the limit allows, too.
+  if (const f64 start = limit_start(); start > 0)
+    wake = std::min(wake, steady_time(start));
   std::unique_lock lock(g->drawable_mutex);
   g->drawable_changed.wait_until(lock, wake, [] {
-    return g->want_drawables && g->next_drawable;
+    return g->want_drawables && g->next_drawable &&
+           CACurrentMediaTime() >= limit_start();
   });
 }
 
@@ -468,7 +507,7 @@ bool gpu_begin_frame(i32 width, i32 height) {
   dispatch_semaphore_wait(g->in_flight, DISPATCH_TIME_FOREVER);
   g->upload_index = (g->upload_index + 1) % kFramesInFlight;
   g->uploads[g->upload_index].used = 0;
-  g->begun = CACurrentMediaTime();
+  g->begun = g->last_draw = CACurrentMediaTime();
   g->commands = [g->queue commandBuffer];
   g->draws.clear();
   return true;

@@ -44,8 +44,19 @@ the display depends on the window:
 - Windowed, every pass draws a frame and hands it to macOS's window
   compositor, which shows the newest at each display refresh.
 - Full screen (F11), frames skip the compositor and go straight to the
-  display, one per refresh: each is drawn as soon as the display frees a
-  buffer, and shows at the next refresh.
+  display. How is the frame limiter's choice (settings, Ctrl+O):
+  - **VSync**, the default: one frame per refresh, shown whole. Each is drawn
+    as soon as the display frees a buffer and shows at the next refresh,
+    about one refresh after its drawing starts.
+  - **2x, 4x or 8x refresh, or Unlimited**: frames are drawn up to that many
+    times per refresh (Unlimited, as often as the game loop runs) and each
+    shows the moment it's drawn, from wherever the display is in drawing the
+    screen. That's a couple of ms after its drawing starts rather than a
+    refresh, but a moving image can split where a new frame replaces the
+    last (tearing), and the GPU does several times the work.
+
+  Windowed, the limit caps how many frames are drawn per refresh; the
+  compositor still shows them whole.
 
 The bottom-right corner shows, for example,
 `120 fps   1000 updates/s   key to screen 11.8 ms   aim to screen 8.8 ms   key to sound 19.6 ms`:
@@ -87,7 +98,8 @@ keyboard reports every 8.0 ms   aim every 0.99 ms
   next cycle starts. A moving cursor's newest movement is fresh when a frame
   starts, so its wait is shorter than a press's.
 - **output**: from a frame starting to draw to the display showing it, as
-  Metal reports it; for sound, the output device's delay as Core Audio
+  Metal reports it; without vsync, to the display switching to it, partway
+  down the screen. For sound, the output device's delay as Core Audio
   reports it, not measured.
 - **total**: for the screen, measured from the input's stamp to the
   display, plus the driver for aim; for sound, the stages added up.

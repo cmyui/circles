@@ -375,6 +375,10 @@ struct App {
   // The game loop sleeps to run at most 1000 passes per second, rather than
   // as fast as it can.
   bool                     frame_cap = true;
+  // Full screen frames: with vsync (0), whole at each refresh; without, as
+  // soon as drawn, where they can tear, at most 2, 4 or 8 per refresh (1-3)
+  // or unlimited (4). See gpu_set_frame_limit.
+  i32                      frame_limiter = 0;
   // The cursor's size, a multiple of the skin's, 0.1 to 2 as in osu!.
   f32                      cursor_size = 1;
   // Whether a map's own combo colours replace the skin's.
@@ -570,6 +574,9 @@ void gameplay_focus_lost(App& app);
 void set_pen_direct(App& app, bool on);
 void update_tablet_mapping(App& app);
 bool import_tablet_settings(App& app);
+
+// Applies app.frame_limiter.
+void apply_frame_limiter(App& app);
 
 // settings_menu.cc
 void toggle_settings(App& app);

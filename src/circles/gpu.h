@@ -10,9 +10,12 @@
 //   compositor shows the newest at each refresh, so frames are drawn as often
 //   as the game loop runs: the one it takes is at most a pass old.
 // - Full screen, frames bypass the compositor and go straight to the display
-//   through a CAMetalLayer, synced to its refresh. The layer has two
-//   drawables, one on screen and one to draw: as soon as the display frees
-//   one, the game loop draws into it, and it shows at the next refresh.
+//   through a CAMetalLayer. With vsync, the layer has two drawables, one on
+//   screen and one to draw: as soon as the display frees one, the game loop
+//   draws into it, and it shows whole at the next refresh. Without vsync,
+//   each frame shows the moment it's drawn, from wherever the display is in
+//   drawing the screen: newer, but split where it replaces the last
+//   (tearing).
 //
 // Either way, colour values reach the display unconverted, as its own colour
 // space: a wide-gamut display shows its full range.
@@ -46,10 +49,14 @@ GpuTexture* gpu_create_texture(i32           width,
                                bool          drawn_into);
 void gpu_release_texture(GpuTexture* texture);
 
-// Whether to draw a frame now: windowed, always; full screen, once the
+// Whether full screen waits for the display's refresh (vsync), and without
+// it, how many frames to draw per refresh, windowed too; 0 draws as often
+// as there's somewhere to draw.
+void gpu_set_frame_limit(bool vsync, i32 per_refresh);
+// Whether to draw a frame now: the limit allows it and, full screen, the
 // display has freed a drawable.
 bool gpu_frame_due();
-// Sleeps until `wake`, or until a full screen frame is due.
+// Sleeps until `wake`, or until a frame is due.
 void gpu_sleep_until(std::chrono::steady_clock::time_point wake);
 
 // Starts recording a frame of the window's size in pixels. False if there's
