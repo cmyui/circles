@@ -284,7 +284,8 @@ and F2 for a random song.
 
 ## Limitations
 
-- Without a skin, hitsounds are synthesized. Beatmaps' own hitsound samples,
+- Without a skin, hitsounds are synthesized: normal, soft and drum sets, as
+  skins have, with flat, drum-like hits. Beatmaps' own hitsound samples,
   storyboards and videos are ignored.
 - Skins don't restyle the menus, song select, pause screen or input overlay.
 - osu!stable scores a replay's spinners partly on its own display frames, so
