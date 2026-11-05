@@ -1143,6 +1143,16 @@ void app_key(App& app, i32 key, i32 action) {
     save_settings(app);
     return;
   }
+  if (key == GLFW_KEY_F7 && action == GLFW_PRESS) {
+    // The frame limiter's next choice, as osu!'s F7 steps through them.
+    app.frame_limiter = (app.frame_limiter + 1) %
+                        static_cast<i32>(std::size(kFrameLimiterNames));
+    apply_frame_limiter(app);
+    save_settings(app);
+    show_toast(app, std::string("Frame limiter: ") +
+                        kFrameLimiterNames[app.frame_limiter]);
+    return;
+  }
   // On release: macOS drops the release of a key held as the window changes
   // to or from full screen, and GLFW then takes its next press for a repeat.
   if (key == GLFW_KEY_F11 && action == GLFW_RELEASE) {

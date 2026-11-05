@@ -575,6 +575,10 @@ void set_pen_direct(App& app, bool on);
 void update_tablet_mapping(App& app);
 bool import_tablet_settings(App& app);
 
+// The frame limiter's choices, as the settings show them, in
+// app.frame_limiter's order.
+inline constexpr const char* kFrameLimiterNames[] = {
+    "VSync", "2x refresh", "4x refresh", "8x refresh", "Unlimited"};
 // Applies app.frame_limiter.
 void apply_frame_limiter(App& app);
 

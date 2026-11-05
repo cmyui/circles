@@ -59,10 +59,6 @@ enum Row : i32 {
   kRowCount
 };
 
-// As app.frame_limiter numbers them.
-constexpr const char* kFrameLimiterNames[] = {
-    "VSync", "2x refresh", "4x refresh", "8x refresh", "Unlimited"};
-
 void pen_changed(App& app) {
   set_pen_direct(app, app.pen_direct);
 }
