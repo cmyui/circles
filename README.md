@@ -70,10 +70,11 @@ release, a minute or two after either:
 
 ## Frames and latency
 
-The game loop runs up to 1000 times a second (the cap can be lifted in
-settings, Ctrl+O). Each pass reads input, advances the game and plays its
-sounds; presses are judged at the time macOS stamped them. How frames reach
-the display depends on the window:
+The game loop runs as often as it can, for the least latency; turning on
+the cap in settings (Ctrl+O) limits it to 1000 times a second, sleeping
+between passes rather than keeping a CPU core busy. Each pass reads input,
+advances the game and plays its sounds; presses are judged at the time
+macOS stamped them. How frames reach the display depends on the window:
 
 - Windowed, every pass draws a frame and hands it to macOS's window
   compositor, which shows the newest at each display refresh.

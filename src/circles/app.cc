@@ -75,7 +75,7 @@ struct Settings {
   bool        mouse_buttons = true;
   Mods        mods = 0;
   f32         background_dim = 1;
-  bool        frame_cap = true;
+  bool        frame_cap = false;
   i32         frame_limiter = 4;  // unlimited
   f32         cursor_size = 1;
   bool        beatmap_colours = false;

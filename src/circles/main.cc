@@ -106,9 +106,10 @@ int main(int argc, char** argv) {
     return 1;
   }
 
-  // The game loop runs up to 1000 times per second, sleeping between passes
-  // rather than spinning a core, unless the cap is turned off in settings
-  // (or for a benchmark, --uncapped). Each pass handles input and advances
+  // The game loop runs as often as it can, for the least latency, unless
+  // the cap is turned on in settings: then up to 1000 times per second,
+  // sleeping between passes rather than spinning a core (--uncapped lifts it
+  // for a benchmark). Each pass handles input and advances
   // the game; it draws when gpu_frame_due says, and in full screen the loop
   // wakes early when the display frees a buffer. Presses are judged by their
   // own timestamps, so the loop's rate doesn't limit their precision.

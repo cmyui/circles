@@ -389,9 +389,9 @@ struct App {
   bool                     mouse_buttons = true;
   // Gameplay's background dim, 0 to 1; 1 hides the background.
   f32                      background_dim = 1;
-  // The game loop sleeps to run at most 1000 passes per second, rather than
-  // as fast as it can.
-  bool                     frame_cap = true;
+  // The game loop sleeps to run at most 1000 passes per second. Off, the
+  // default, it runs as fast as it can, for the least latency.
+  bool                     frame_cap = false;
   // Full screen frames: with vsync (0), whole at each refresh; without, as
   // soon as drawn, where they can tear, at most 2, 4 or 8 per refresh (1-3)
   // or unlimited (4). See gpu_set_frame_limit.
