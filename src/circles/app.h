@@ -21,6 +21,7 @@
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
 #include <array>
+#include <atomic>
 #include <deque>
 #include <future>
 #include <memory>
@@ -373,23 +374,32 @@ struct App {
   std::vector<ReplayEntry> replays;
   // Beatmap archives dropped on the window, awaiting import.
   std::vector<std::string> dropped;
+  // Starter beatmaps for an empty library, downloading one by one into
+  // beatmaps/ (see download_files); each imports once saved.
+  struct Starters {
+    std::vector<std::string>          paths;
+    std::shared_ptr<std::atomic<i32>> finished;  // null once all have
+    i32                               seen = 0;   // finished ones checked
+    i32                               saved = 0;  // of those, saved
+    bool waiting = false;  // saved but not yet imported
+  } starters;
   std::string              replay_to_watch;
   // Whether mouse buttons hit in gameplay. Tablet players who tap keys turn
   // them off so pen taps don't count.
   bool                     mouse_buttons = true;
   // Gameplay's background dim, 0 to 1; 1 hides the background.
-  f32                      background_dim = 0.8f;
+  f32                      background_dim = 1;
   // The game loop sleeps to run at most 1000 passes per second, rather than
   // as fast as it can.
   bool                     frame_cap = true;
   // Full screen frames: with vsync (0), whole at each refresh; without, as
   // soon as drawn, where they can tear, at most 2, 4 or 8 per refresh (1-3)
   // or unlimited (4). See gpu_set_frame_limit.
-  i32                      frame_limiter = 0;
+  i32                      frame_limiter = 4;
   // The cursor's size, a multiple of the skin's, 0.1 to 2 as in osu!.
   f32                      cursor_size = 1;
   // Whether a map's own combo colours replace the skin's.
-  bool                     beatmap_colours = true;
+  bool                     beatmap_colours = false;
   // The pen, read by circles itself rather than through its driver's
   // cursor (F5; see tablet.h). Its area maps onto the whole display, or
   // onto just the window; the cursor stays in the window either way.
@@ -461,6 +471,16 @@ void app_cursor(App& app, f64 x, f64 y);
 void app_focus(App& app, bool focused);
 // Files dropped on the window: .osz beatmap archives are imported.
 void app_drop(App& app, std::span<const char* const> paths);
+
+// download_macos.mm
+// Downloads each file's URL to its path in the background, one after
+// another, replacing what's there once it has the whole file; returns how
+// many have finished, saved or not, so the first that many are done.
+struct DownloadFile {
+  std::string url, path;
+};
+std::shared_ptr<std::atomic<i32>> download_files(
+    std::vector<DownloadFile> files);
 
 // window_macos.mm
 void toggle_fullscreen(App& app);

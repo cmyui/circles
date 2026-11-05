@@ -29,6 +29,32 @@ constexpr const char* kSkinDirectory = "skins";
 constexpr const char* kReplayDirectory = "replays";
 constexpr const char* kSettingsPath = "settings.txt";
 
+// Downloaded into an empty library one by one, smallest first, so the first
+// is playable soonest, and saved under their osu! names: songs licensed to
+// osu! (Featured Artists) whose sets osu!lazer also bundles, hosted on
+// cmyui.xyz. About 50 MB in all.
+constexpr struct {
+  const char* name;
+  const char* url;
+} kStarterBeatmaps[] = {
+    {"1667560 xi - FREEDOM DiVE",
+     "https://i.cmyui.xyz/ATSyeMY35i1aYnvxMD-pHw.osz"},
+    {"1048705 Thaehan - Never Give Up",
+     "https://i.cmyui.xyz/JnrWhz9bhYu6b7FvbQ.osz"},
+    {"1971987 James Landino - Aresene's Bazaar",
+     "https://i.cmyui.xyz/qUHQ5HU7LG0V7r56uhg.osz"},
+    {"1016347 Silentroom - Protoflicker",
+     "https://i.cmyui.xyz/-gAinyqe8i2rNs1VM8OJ.osz"},
+    {"241526 Soleily - Renatus", "https://i.cmyui.xyz/MgeWWOsJUUgR0xM.osz"},
+    {"151878 Chasers - Lost", "https://i.cmyui.xyz/E6f23kh2oL8.osz"},
+    {"1978614 Krimek - Idyllic World",
+     "https://i.cmyui.xyz/7BBFrNt_3-QLRHeUMDNQ.osz"},
+    {"1428384 DUAL ALTER WORLD - Veracila",
+     "https://i.cmyui.xyz/wsKhFhThHSkFqIeZGQ.osz"},
+    {"1841885 cYsmix - triangles",
+     "https://i.cmyui.xyz/9aE-UDl3fA93DYKYsablag.osz"},
+};
+
 constexpr f64 kTransitionHalf = 0.18;  // seconds to fade out, then back in
 constexpr f64 kBackdropFade = 0.4;
 constexpr f64 kTrailLength = 0.12;
@@ -48,11 +74,11 @@ struct Settings {
   std::string skin;  // folder name in skins/; empty for the built-in look
   bool        mouse_buttons = true;
   Mods        mods = 0;
-  f32         background_dim = 0.8f;
+  f32         background_dim = 1;
   bool        frame_cap = true;
-  i32         frame_limiter = 0;
+  i32         frame_limiter = 4;  // unlimited
   f32         cursor_size = 1;
-  bool        beatmap_colours = true;
+  bool        beatmap_colours = false;
   i32         readout = 1;  // Readout::mode
   bool        pen_direct = false;
   bool        tablet_full_screen = true;
@@ -436,10 +462,11 @@ void draw_profiler_overlay(App& app) {
             fade(kWhite, 0.8f));
 }
 
-// Imports the dropped archives into beatmaps/ and selects the first new map.
-// Rescanning renumbers the library's maps, so it waits until no screen holds
-// one: the main menu or song select.
-void import_dropped(App& app) {
+// Imports archives the player dropped, selecting the first, and starter
+// beatmaps saved into beatmaps/, quietly, keeping the selection if there is
+// one. Rescanning renumbers the library's maps, so it waits until no screen
+// holds one: the main menu or song select.
+void import_archives_waiting(App& app) {
   namespace fs = std::filesystem;
   std::error_code error;
   for (const auto& path : app.dropped) {
@@ -450,10 +477,13 @@ void import_dropped(App& app) {
       fs::copy_file(source, destination, fs::copy_options::skip_existing,
                     error);
   }
+  const bool dropped = !app.dropped.empty();
   app.dropped.clear();
+  app.starters.waiting = false;
   const auto imported = import_archives(kBeatmapDirectory, ".osz");
   if (imported.empty()) {
-    show_toast(app, "Already imported, or not a valid .osz");
+    if (dropped)
+      show_toast(app, "Already imported, or not a valid .osz");
     return;
   }
   const std::string previous =
@@ -467,15 +497,17 @@ void import_dropped(App& app) {
     if (info.md5 == previous)
       kept = static_cast<i32>(m);
   }
-  char text[64];
-  snprintf(text, sizeof(text), "Imported %zu beatmap set%s", imported.size(),
-           imported.size() == 1 ? "" : "s");
-  show_toast(app,
-             select >= 0 ? text : "Imported, but it has no osu!standard maps");
+  if (dropped) {
+    char text[64];
+    snprintf(text, sizeof(text), "Imported %zu beatmap set%s",
+             imported.size(), imported.size() == 1 ? "" : "s");
+    show_toast(app, select >= 0 ? text
+                                : "Imported, but it has no osu!standard maps");
+  }
   // The old selection, renumbered, so selecting the new map compares songs
   // and starts its preview.
   app.selected_map = kept;
-  if (select >= 0)
+  if (select >= 0 && (dropped || kept < 0))
     select_map(app, select, true);
   if (app.screen == Screen::SongSelect)
     select_enter(app);
@@ -1040,6 +1072,16 @@ bool app_init(App& app) {
   app.replays = scan_replays(kReplayDirectory);
   printf("%zu beatmaps in %zu sets, %zu replays\n", app.library.maps.size(),
          app.library.sets.size(), app.replays.size());
+  if (app.library.maps.empty()) {
+    std::vector<DownloadFile> files;
+    for (const auto& [name, url] : kStarterBeatmaps) {
+      files.push_back({url, (std::filesystem::path(kBeatmapDirectory) /
+                             (std::string(name) + ".osz"))
+                                .string()});
+      app.starters.paths.push_back(files.back().path);
+    }
+    app.starters.finished = download_files(std::move(files));
+  }
 
   app.now = glfwGetTime();
   app.fps_window_start = app.now;
@@ -1082,9 +1124,27 @@ void app_update(App& app, f64 now) {
     app.fps_window_start = now;
   }
   update_backdrop(app);
-  if (!app.dropped.empty() && app.transition_started < 0 &&
+  // Each starter beatmap waits to import once saved; when all have finished,
+  // a warning if none could be downloaded.
+  if (auto& starters = app.starters; starters.finished) {
+    for (; starters.seen < *starters.finished; ++starters.seen)
+      if (std::filesystem::exists(starters.paths[starters.seen])) {
+        ++starters.saved;
+        starters.waiting = true;
+      }
+    if (starters.seen == static_cast<i32>(starters.paths.size())) {
+      if (!starters.saved)
+        show_toast(app,
+                   "Couldn't download the starter beatmaps: drop .osz files "
+                   "on the window",
+                   kWarningSeconds);
+      starters.finished.reset();
+    }
+  }
+  if ((!app.dropped.empty() || app.starters.waiting) &&
+      app.transition_started < 0 &&
       (app.screen == Screen::MainMenu || app.screen == Screen::SongSelect))
-    import_dropped(app);
+    import_archives_waiting(app);
   for (auto* trail : {&app.trail, &app.game.replay_trail})
     while (!trail->empty() && now - trail->front().time > kTrailLength)
       trail->pop_front();

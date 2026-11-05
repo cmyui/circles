@@ -1,5 +1,6 @@
 # Builds and tests circles on Apple silicon. For a version tag (v*), also
-# publishes a release with the app, signed ad hoc, zipped.
+# puts the app, signed ad hoc, zipped, on that tag's release: the one
+# published in GitHub's UI, which made the tag, or else a new one.
 name: Build
 
 on:
@@ -23,5 +24,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           ditto -c -k --keepParent build/circles.app circles-macos.zip
-          gh release create "$GITHUB_REF_NAME" circles-macos.zip \
-            --title "$GITHUB_REF_NAME" --generate-notes
+          if gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" circles-macos.zip --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" circles-macos.zip \
+              --title "$GITHUB_REF_NAME" --generate-notes
+          fi

@@ -52,6 +52,7 @@ target_link_libraries(circles_third_party PUBLIC
 add_library(circles_core STATIC
   src/circles/app.cc
   src/circles/archive.cc
+  src/circles/download_macos.mm
   src/circles/audio.cc
   src/circles/gameplay.cc
   src/circles/gfx.cc
@@ -78,8 +79,8 @@ add_library(circles_core STATIC
   src/circles/window_macos.mm
 )
 target_include_directories(circles_core PUBLIC src)
-set_source_files_properties(src/circles/gpu.mm PROPERTIES
-  COMPILE_OPTIONS -fobjc-arc)
+set_source_files_properties(src/circles/gpu.mm src/circles/download_macos.mm
+  PROPERTIES COMPILE_OPTIONS -fobjc-arc)
 target_compile_options(circles_core PRIVATE -Wall -Wextra)
 # osu!stable computes one floating-point operation at a time; fused
 # multiply-adds would change its judgements' arithmetic.
