@@ -372,8 +372,8 @@ struct App {
   f64  audio_offset = 0;
   // Replays in replays/, and the one gameplay should play back next.
   std::vector<ReplayEntry> replays;
-  // Beatmap archives dropped on the window, awaiting import.
-  std::vector<std::string> dropped;
+  // Beatmap and skin archives dropped on the window, awaiting import.
+  std::vector<std::string> dropped, dropped_skins;
   // Starter beatmaps for an empty library, downloading one by one into
   // beatmaps/ (see download_files); each imports once saved.
   struct Starters {
@@ -469,7 +469,8 @@ void app_mouse_button(App& app, i32 button, i32 action);
 void app_scroll(App& app, f64 dy);
 void app_cursor(App& app, f64 x, f64 y);
 void app_focus(App& app, bool focused);
-// Files dropped on the window: .osz beatmap archives are imported.
+// Files dropped on the window: .osz beatmap archives and .osk skins are
+// imported.
 void app_drop(App& app, std::span<const char* const> paths);
 
 // download_macos.mm
