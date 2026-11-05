@@ -605,9 +605,6 @@ bool audio_init(Audio& audio) {
   }
 
   audio.ready = true;
-  load_sounds(audio, [](const std::string&) {
-    return std::string();
-  });
   if (ma_device_start(&audio.device) != MA_SUCCESS)
     fprintf(stderr, "audio: failed to start the output device\n");
   return true;
