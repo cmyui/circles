@@ -7,3 +7,7 @@
 | [stb](https://github.com/nothings/stb) | `2c980bb` | `stb_image.h`, `stb_truetype.h`, `stb_vorbis.c` |
 
 The single-header implementations are compiled in `src/circles/third_party.c`.
+
+GLFW 3.4 and xz 5.8.4 (for liblzma's headers; the library is macOS's) aren't
+kept here: CMake downloads their release archives when it first configures,
+pinned by URL and SHA-256 in `CMakeLists.txt`.

@@ -981,6 +981,8 @@ void apply_frame_limiter(App& app) {
 }
 
 bool app_init(App& app) {
+  // GLFW would move into the app's Resources; the game stays in its folder.
+  glfwInitHint(GLFW_COCOA_CHDIR_RESOURCES, GLFW_FALSE);
   if (!glfwInit())
     return false;
   // GLFW makes the window but no graphics context: Metal draws into it.
@@ -1022,6 +1024,11 @@ bool app_init(App& app) {
   if (settings.pen_direct)
     set_pen_direct(app, true);
   set_master_volume(app.audio, settings.volume);
+  // A new game folder starts empty.
+  std::error_code error;
+  for (const char* folder :
+       {kBeatmapDirectory, kSkinDirectory, kReplayDirectory})
+    std::filesystem::create_directories(folder, error);
   const i32 imported =
       static_cast<i32>(import_archives(kBeatmapDirectory, ".osz").size());
   // The skin waits for skins/ to be scanned, and a newly added skin takes

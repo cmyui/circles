@@ -28,7 +28,6 @@ struct GpuTexture {
 
 namespace {
 
-constexpr const char* kShaderPath = "shaders/circles.metal";
 constexpr i32         kFramesInFlight = 3;
 // Windowed frames. The compositor holds on to the last few it was handed for
 // a while, and the game loop should always find one free to draw into.
@@ -353,21 +352,26 @@ bool gpu_init(GLFWwindow* window) {
   if (!g->device)
     return false;
   g->queue = [g->device newCommandQueue];
-  const std::string source = read_text_file(kShaderPath);
+  // In the app's Resources.
+  NSString* const   path = [NSBundle.mainBundle pathForResource:@"circles"
+                                                         ofType:@"metal"];
+  const std::string source = path ? read_text_file(path.UTF8String) : "";
   if (source.empty()) {
-    fprintf(stderr, "failed to open %s\n", kShaderPath);
+    fprintf(stderr, "failed to open circles.metal in the app's Resources\n");
     return false;
   }
   MTLCompileOptions* options = [[MTLCompileOptions alloc] init];
   // Fast math, except where circles.metal asks for exact operations, as for
-  // stable's arithmetic in slider bodies.
-  options.mathMode = MTLMathModeFast;
+  // stable's arithmetic in slider bodies. Before macOS 15 it's
+  // fastMathEnabled, on by default.
+  if (@available(macOS 15.0, *))
+    options.mathMode = MTLMathModeFast;
   NSError*       error = nil;
   id<MTLLibrary> library = [g->device newLibraryWithSource:@(source.c_str())
                                                    options:options
                                                      error:&error];
   if (!library) {
-    NSLog(@"%s: %@", kShaderPath, error);
+    NSLog(@"circles.metal: %@", error);
     return false;
   }
   g->sprites =

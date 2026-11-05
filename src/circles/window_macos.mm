@@ -31,4 +31,15 @@ void window_screen(App& app, Vec2& origin, Vec2& size) {
   size = {static_cast<f32>(NSWidth(frame)), static_cast<f32>(NSHeight(frame))};
 }
 
+std::string game_folder() {
+  NSString* support = NSSearchPathForDirectoriesInDomains(
+                          NSApplicationSupportDirectory, NSUserDomainMask, YES)
+                          .firstObject;
+  return [support stringByAppendingPathComponent:@"circles"].UTF8String;
+}
+
+void open_folder(const std::string& path) {
+  [NSWorkspace.sharedWorkspace openURL:[NSURL fileURLWithPath:@(path.c_str())]];
+}
+
 }  // namespace circles

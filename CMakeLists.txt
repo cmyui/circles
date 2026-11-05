@@ -1,5 +1,9 @@
 cmake_minimum_required(VERSION 3.26)
-project(circles LANGUAGES C CXX OBJCXX)
+# The oldest macOS circles runs on, so a build runs on more than the Mac it
+# was made on. Set before project(), which reads it.
+set(CMAKE_OSX_DEPLOYMENT_TARGET "13.0" CACHE STRING "Oldest macOS to run on")
+# OBJC for GLFW's Objective-C, which would otherwise build as Objective-C++.
+project(circles LANGUAGES C CXX OBJC OBJCXX)
 include(CTest)
 
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
@@ -15,10 +19,26 @@ if(NOT APPLE)
   message(FATAL_ERROR "circles currently supports macOS only")
 endif()
 
-find_package(PkgConfig REQUIRED)
-pkg_check_modules(GLFW REQUIRED IMPORTED_TARGET glfw3)
-# Replays (.osr) are LZMA-compressed.
-pkg_check_modules(LZMA REQUIRED IMPORTED_TARGET liblzma)
+# Downloaded on the first configure into build/_deps, checked against their
+# hashes, and kept there for later builds:
+# - GLFW 3.4, built into the app, so it needs nothing installed;
+# - liblzma's headers, from xz 5.8.4, for replays' (.osr) compression. The
+#   library is macOS's own; xz's build isn't wanted, so SOURCE_SUBDIR points
+#   where there's nothing to build.
+include(FetchContent)
+set(GLFW_BUILD_EXAMPLES OFF)
+set(GLFW_BUILD_TESTS OFF)
+set(GLFW_BUILD_DOCS OFF)
+set(GLFW_INSTALL OFF)
+FetchContent_Declare(glfw
+  URL https://github.com/glfw/glfw/releases/download/3.4/glfw-3.4.zip
+  URL_HASH SHA256=b5ec004b2712fd08e8861dc271428f048775200a2df719ccf575143ba749a3e9
+  SYSTEM)
+FetchContent_Declare(xz
+  URL https://github.com/tukaani-project/xz/releases/download/v5.8.4/xz-5.8.4.tar.gz
+  URL_HASH SHA256=0014c7886930454fe8bd4228665b51af55eeae560ea135c9c4cd33f55b2591d9
+  SOURCE_SUBDIR src/liblzma/api)
+FetchContent_MakeAvailable(glfw xz)
 
 # Single-header libraries (miniaudio, stb), compiled once as C. Their headers
 # are system includes so our warnings don't apply to them.
@@ -64,14 +84,19 @@ target_compile_options(circles_core PRIVATE -Wall -Wextra)
 # osu!stable computes one floating-point operation at a time; fused
 # multiply-adds would change its judgements' arithmetic.
 target_compile_options(circles_core PUBLIC -ffp-contract=off)
+target_include_directories(circles_core SYSTEM PRIVATE
+  ${xz_SOURCE_DIR}/src/liblzma/api)
 target_link_libraries(circles_core PUBLIC
-  circles_third_party PkgConfig::GLFW PkgConfig::LZMA "-framework AppKit"
+  circles_third_party glfw lzma "-framework AppKit"
   "-framework Metal" "-framework QuartzCore" "-framework IOSurface"
   "-framework IOKit")
 
 # An app bundle, so macOS knows circles is a game: Game Mode turns on while
 # it's full screen.
-add_executable(circles MACOSX_BUNDLE src/circles/main.cc)
+# The shaders go in its Resources, compiled when the game starts.
+add_executable(circles MACOSX_BUNDLE src/circles/main.cc shaders/circles.metal)
+set_source_files_properties(shaders/circles.metal PROPERTIES
+  MACOSX_PACKAGE_LOCATION Resources)
 set_target_properties(circles PROPERTIES
   MACOSX_BUNDLE_INFO_PLIST ${PROJECT_SOURCE_DIR}/macos/Info.plist)
 target_compile_options(circles PRIVATE -Wall -Wextra)

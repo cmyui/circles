@@ -4,8 +4,8 @@
 //   the cursor's size, as osu!'s multiple of the skin's; whether the game
 //   loop is capped at 1000 updates per second; the frame limiter, whether
 //   full screen frames wait for the display's refresh or show as soon as
-//   drawn, where they can tear; and whether maps' own combo colours replace
-//   the skin's.
+//   drawn, where they can tear; whether maps' own combo colours replace the
+//   skin's; and opening the game folder, for adding skins.
 // - Tablet: whether circles reads the pen itself (also F5); whether its area
 //   maps onto the whole display or the window; the area; the tip's pressure
 //   that clicks; fitting the area onto the connected tablet, and importing
@@ -16,6 +16,7 @@
 #include <array>
 #include <cmath>
 #include <cstdio>
+#include <filesystem>
 #include <span>
 
 namespace circles {
@@ -57,6 +58,7 @@ enum Row : i32 {
   kFrameCapRow,
   kFrameLimiterRow,
   kComboColourRow,
+  kOpenFolderRow,
   kPenRow,
   kFullScreenRow,
   kAreaWidthRow,
@@ -103,6 +105,10 @@ void fit_area_to_tablet(App& app) {
   show_toast(app, std::string("Fitted the area to the ") + tablet->name);
 }
 
+void open_game_folder(App&) {
+  open_folder(std::filesystem::current_path().string());
+}
+
 void import_area(App& app) {
   const TabletModel* tablet = connected_tablet();
   show_toast(app, import_tablet_settings(app)
@@ -125,6 +131,7 @@ constexpr RowSpec kRows[kRowCount] = {
      .names = kFrameLimiterNames,
      .changed = apply_frame_limiter},
     {.label = "Beatmap combo colours", .choice = &App::beatmap_colours},
+    {.label = "Open game folder", .changed = open_game_folder},
     {.label = "Read the pen directly (F5)",
      .page = kTablet,
      .choice = &App::pen_direct,
