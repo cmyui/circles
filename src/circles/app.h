@@ -441,6 +441,7 @@ struct App {
   Readout                readout;
   std::string            toast;
   f64                    toast_time = -1e9;
+  f64                    toast_seconds = 0;  // how long it shows
   bool                   quit = false;
 };
 
@@ -480,7 +481,10 @@ void select_map(App& app, i32 map, bool preview);
 void play_preview(App& app);
 // `parallax` (0 to 1) shifts the image slightly against the cursor.
 void draw_backdrop(App& app, f32 dim, f32 parallax);
-void show_toast(App& app, std::string text);
+// A message at the top of the screen, for `seconds`; warnings, which say
+// more, for longer.
+inline constexpr f64 kToastSeconds = 2.5, kWarningSeconds = 7.5;
+void show_toast(App& app, std::string text, f64 seconds = kToastSeconds);
 // Shifts the global audio offset by `ms` and saves it.
 void change_audio_offset(App& app, f64 ms);
 // Switches to skins[index], or the built-in look for -1, and saves the choice.

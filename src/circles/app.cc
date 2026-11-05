@@ -32,7 +32,6 @@ constexpr const char* kSettingsPath = "settings.txt";
 constexpr f64 kTransitionHalf = 0.18;  // seconds to fade out, then back in
 constexpr f64 kBackdropFade = 0.4;
 constexpr f64 kTrailLength = 0.12;
-constexpr f64 kToastDuration = 2.5;
 constexpr f32 kVolumeStep = 0.05f;  // per scroll wheel notch
 constexpr f32 kTau = 6.2831853f;
 
@@ -530,7 +529,7 @@ void read_pen(App& app) {
     pen.tablet = tablet;
     const std::string warning = tablet_area_warning(app);
     if (!warning.empty())
-      show_toast(app, "Pen: " + warning);
+      show_toast(app, "Pen: " + warning, kWarningSeconds);
   }
   pen.reports.clear();
   take_pen_reports(pen.reports);
@@ -884,11 +883,11 @@ void draw_overlays(App& app) {
     settings_draw(app);
   if (app.profiler.active && app.profiler.overlay)
     draw_profiler_overlay(app);
-  if (app.now - app.toast_time < kToastDuration) {
-    const f32 alpha = clamp01(
-        static_cast<f32>(std::min(app.now - app.toast_time,
-                                  kToastDuration - (app.now - app.toast_time)) /
-                         0.25));
+  if (app.now - app.toast_time < app.toast_seconds) {
+    const f32 alpha = clamp01(static_cast<f32>(
+        std::min(app.now - app.toast_time,
+                 app.toast_seconds - (app.now - app.toast_time)) /
+        0.25));
     const f32 width = measure_text(app.bold, app.toast, 17) + 40;
     draw_rounded_rect(r, (app.width - width) / 2, 18, width, 40, 20,
                       fade(hex_color(0x15152A), 0.9f * alpha));
@@ -1387,9 +1386,10 @@ void draw_backdrop(App& app, f32 dim, f32 parallax) {
                    fade(tint, appear), zoom, shift_x, shift_y);
 }
 
-void show_toast(App& app, std::string text) {
+void show_toast(App& app, std::string text, f64 seconds) {
   app.toast = std::move(text);
   app.toast_time = app.now;
+  app.toast_seconds = seconds;
 }
 
 void save_settings(const App& app) {

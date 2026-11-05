@@ -347,8 +347,10 @@ void use_profile(App& app, i32 slot) {
     set_tablet_area(app, profile.area);
     app.tablet_area_set = true;
     const std::string warning = tablet_area_warning(app);
-    show_toast(app, "Loaded " + profile.name +
-                        (warning.empty() ? "" : "; " + warning));
+    show_toast(app,
+               "Loaded " + profile.name +
+                   (warning.empty() ? "" : "; " + warning),
+               warning.empty() ? kToastSeconds : kWarningSeconds);
   } else {
     show_toast(app, "Deleted " + profile.name);
     profile = {};
