@@ -1,5 +1,5 @@
-// The tablet's settings, from OpenTabletDriver, and its reports, through the
-// pointer listener (profiler_macos.mm).
+// The tablet's reports, through the pointer listener (profiler_macos.mm),
+// and importing its area from OpenTabletDriver.
 #include <circles/tablet.h>
 
 #import <AppKit/AppKit.h>
@@ -59,12 +59,12 @@ i32 int_property(IOHIDDeviceRef ref, CFStringRef key) {
 
 }  // namespace
 
-bool load_tablet_settings(TabletSettings& settings) {
+bool import_tablet_area(TabletArea& area, f32& tip_threshold) {
   @autoreleasepool {
     NSString* path = [NSHomeDirectory()
         stringByAppendingPathComponent:
             @"Library/Application Support/OpenTabletDriver/settings.json"];
-    NSData*   data = [NSData dataWithContentsOfFile:path];
+    NSData* data = [NSData dataWithContentsOfFile:path];
     if (!data)
       return false;
     NSDictionary* root = [NSJSONSerialization JSONObjectWithData:data
@@ -76,46 +76,21 @@ bool load_tablet_settings(TabletSettings& settings) {
       if (![profile[@"Tablet"] isEqual:@"Wacom CTL-472"] ||
           ![profile[@"OutputMode"][@"Path"] hasSuffix:@"AbsoluteMode"])
         continue;
-      NSDictionary* absolute = profile[@"AbsoluteModeSettings"];
-      NSDictionary* area = absolute[@"Tablet"];
-      NSDictionary* display = absolute[@"Display"];
-      settings.area_x = [area[@"X"] floatValue];
-      settings.area_y = [area[@"Y"] floatValue];
-      settings.area_width = [area[@"Width"] floatValue];
-      settings.area_height = [area[@"Height"] floatValue];
-      settings.rotation = [area[@"Rotation"] floatValue];
-      settings.display_x = [display[@"X"] floatValue];
-      settings.display_y = [display[@"Y"] floatValue];
-      settings.display_width = [display[@"Width"] floatValue];
-      settings.display_height = [display[@"Height"] floatValue];
-      settings.clipping = [absolute[@"EnableClipping"] boolValue];
-      settings.limiting = [absolute[@"EnableAreaLimiting"] boolValue];
-      settings.tip_threshold =
+      NSDictionary* tablet = profile[@"AbsoluteModeSettings"][@"Tablet"];
+      if ([tablet[@"Width"] floatValue] <= 0 ||
+          [tablet[@"Height"] floatValue] <= 0)
+        return false;
+      area.x = [tablet[@"X"] floatValue];
+      area.y = [tablet[@"Y"] floatValue];
+      area.width = [tablet[@"Width"] floatValue];
+      area.height = [tablet[@"Height"] floatValue];
+      area.rotation = [tablet[@"Rotation"] floatValue];
+      tip_threshold =
           [profile[@"Bindings"][@"TipActivationThreshold"] floatValue];
-      return settings.area_width > 0 && settings.area_height > 0 &&
-             settings.display_width > 0 && settings.display_height > 0;
+      return true;
     }
     return false;
   }
-}
-
-// OpenTabletDriver lays displays out from the leftmost and topmost edges,
-// and places points relative to the first display.
-Vec2 virtual_screen_offset() {
-  CGDirectDisplayID displays[16];
-  uint32_t          count = 0;
-  if (CGGetActiveDisplayList(16, displays, &count) != kCGErrorSuccess ||
-      count == 0)
-    return {};
-  CGFloat left = INFINITY, top = INFINITY;
-  for (uint32_t i = 0; i < count; ++i) {
-    const CGRect bounds = CGDisplayBounds(displays[i]);
-    left = std::min(left, bounds.origin.x);
-    top = std::min(top, bounds.origin.y);
-  }
-  const CGRect first = CGDisplayBounds(displays[0]);
-  return {static_cast<f32>(first.origin.x - left),
-          static_cast<f32>(first.origin.y - top)};
 }
 
 void read_tablet(bool on) {

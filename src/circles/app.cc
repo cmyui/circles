@@ -48,6 +48,10 @@ struct Settings {
   bool        beatmap_colours = true;
   i32         readout = 1;  // Readout::mode
   bool        pen_direct = false;
+  bool        tablet_full_screen = true;
+  TabletArea  tablet_area;
+  bool        tablet_area_set = false;
+  f32         tablet_tip = 1;
 };
 
 Settings load_settings() {
@@ -82,6 +86,20 @@ Settings load_settings() {
       settings.beatmap_colours = std::strtol(value, nullptr, 10) != 0;
     else if (key == "pen_direct")
       settings.pen_direct = std::strtol(value, nullptr, 10) != 0;
+    else if (key == "tablet_full_screen")
+      settings.tablet_full_screen = std::strtol(value, nullptr, 10) != 0;
+    else if (key == "tablet_tip")
+      settings.tablet_tip = std::clamp(
+          static_cast<f32>(std::strtod(value, nullptr)), 0.0f, 100.0f);
+    else if (key == "tablet_area") {
+      TabletArea& area = settings.tablet_area;
+      settings.tablet_area_set =
+          std::sscanf(value, "%f %f %f %f %f", &area.x, &area.y, &area.width,
+                      &area.height, &area.rotation) == 5 &&
+          area.width > 0 && area.height > 0;
+      if (!settings.tablet_area_set)
+        area = {};
+    }
     else if (key == "readout")
       settings.readout =
           std::clamp(static_cast<i32>(std::strtol(value, nullptr, 10)), 0, 2);
@@ -439,7 +457,7 @@ void import_dropped(App& app) {
 // Whether the pen, read directly, is aiming: while it's in range, its
 // driver's cursor, which the same pen moves, is ignored.
 bool pen_aiming(const App& app) {
-  return app.pen.direct && app.pen.in_range && uptime() - app.pen.last < 0.1;
+  return app.pen_direct && app.pen.in_range && uptime() - app.pen.last < 0.1;
 }
 
 void mouse_button(App& app, i32 button, i32 action, f64 time) {
@@ -476,7 +494,7 @@ void set_cursor(App& app, f64 x, f64 y) {
 // own time. The tip is the left button, as OpenTabletDriver binds it.
 void read_pen(App& app) {
   auto& pen = app.pen;
-  if (!pen.direct)
+  if (!app.pen_direct)
     return;
   pen.reports.clear();
   take_pen_reports(pen.reports);
@@ -484,57 +502,27 @@ void read_pen(App& app) {
     return;
   const f64 now = uptime();
   const f64 to_glfw = glfwGetTime() - now;
-  i32       window_x, window_y;
-  glfwGetWindowPos(app.window, &window_x, &window_y);
-  const Vec2 origin =
-      pen.offset +
-      Vec2{static_cast<f32>(window_x), static_cast<f32>(window_y)};
+  // Where the area maps, in the window's points.
+  Vec2 origin{0, 0}, size{app.width, app.height};
+  if (app.tablet_full_screen)
+    window_screen(app, origin, size);
   for (const PenReport& report : pen.reports) {
     pen.last = report.arrived;
     pen.in_range = report.in_range;
-    Vec2 point;
-    if (report.in_range && map_pen(pen.mapping, report.x, report.y, point)) {
-      set_cursor(app, point.x - origin.x, point.y - origin.y);
+    if (report.in_range) {
+      const Vec2 across = map_pen(pen.mapping, report.x, report.y);
+      set_cursor(app,
+                 std::clamp(origin.x + across.x * size.x, 0.0f, app.width),
+                 std::clamp(origin.y + across.y * size.y, 0.0f, app.height));
       app.readout.pen_moves.push_back({report.arrived, now});
     }
-    const bool tip = report.in_range && report.pressure > pen.tip_threshold;
+    const bool tip = report.in_range && report.pressure > app.tablet_tip;
     if (tip != pen.tip) {
       pen.tip = tip;
       mouse_button(app, GLFW_MOUSE_BUTTON_LEFT,
                    tip ? GLFW_PRESS : GLFW_RELEASE, report.arrived + to_glfw);
     }
   }
-}
-
-// Switches between aiming with the pen read directly, mapped with
-// OpenTabletDriver's area, and with its driver's cursor.
-void set_pen_direct(App& app, bool on) {
-  auto&          pen = app.pen;
-  TabletSettings settings;
-  if (on && !load_tablet_settings(settings)) {
-    show_toast(app, "No OpenTabletDriver area for the CTL-472");
-    return;
-  }
-  pen.direct = on;
-  pen.in_range = pen.tip = false;
-  if (on) {
-    pen.mapping = tablet_mapping(settings);
-    pen.tip_threshold = settings.tip_threshold;
-    pen.offset = virtual_screen_offset();
-  }
-  read_tablet(on);
-  // The aim's figures start over, each describing one way of reading it.
-  auto& readout = app.readout;
-  for (LatencyStat* stat : {&readout.driver, &readout.aim_interval,
-                            &readout.aim_read, &readout.aim_wait,
-                            &readout.aim_screen})
-    *stat = {};
-  if (!on)
-    show_toast(app, "Pen: through its driver");
-  else if (listen_to_pointers() == PointerAccess::Listening)
-    show_toast(app, "Pen: read by circles");
-  else
-    show_toast(app, "Pen: read by circles once Input Monitoring is allowed");
 }
 
 // How many recent samples the readout's medians cover.
@@ -544,15 +532,22 @@ constexpr size_t kReadoutSamples = 30;
 // nothing about the usual delay.
 constexpr f64    kStall = 0.1;
 
+// A figure with no sample this recent says nothing about now: it reads "-".
+constexpr f64 kFresh = 3;
+
 void add_sample(LatencyStat& stat, f64 seconds) {
   stat.samples.push_back(static_cast<f32>(seconds * 1000));
   if (stat.samples.size() > kReadoutSamples)
     stat.samples.pop_front();
+  stat.last = uptime();
 }
 
-void refresh(LatencyStat& stat) {
-  if (!stat.samples.empty())
-    stat.ms = percentile({stat.samples.begin(), stat.samples.end()}, 0.5f);
+void refresh(LatencyStat& stat, f64 now) {
+  if (now - stat.last > kFresh)
+    stat.samples.clear();
+  stat.ms = stat.samples.empty()
+                ? -1
+                : percentile({stat.samples.begin(), stat.samples.end()}, 0.5f);
 }
 
 // The driver's time on each cursor movement: from the newest pointing
@@ -689,7 +684,8 @@ void take_samples(App& app) {
 
 // The readout's medians, refreshed with the frame rates.
 void refresh_readout(App& app, f64 span) {
-  auto& readout = app.readout;
+  auto&     readout = app.readout;
+  const f64 now = uptime();
   readout.shown_rate = static_cast<i32>(std::lround(readout.shown / span));
   readout.shown = 0;
   // Listening needs a permission the stage panel asks for; it can be
@@ -701,7 +697,7 @@ void refresh_readout(App& app, f64 span) {
         &readout.aim_read, &readout.frame_wait, &readout.aim_wait,
         &readout.display, &readout.mixer, &readout.key_screen,
         &readout.aim_screen})
-    refresh(*stat);
+    refresh(*stat, now);
 }
 
 // "12.3", or "-" when not known. Under 1 ms, to hundredths: the input stages
@@ -783,7 +779,7 @@ void draw_readout(App& app) {
     else if (readout.pointer_access == PointerAccess::Denied)
       lines.push_back({"driver: allow circles in Input Monitoring settings"});
     lines.push_back({"pen ",
-                     app.pen.direct ? "read by circles" : "through its driver",
+                     app.pen_direct ? "read by circles" : "through its driver",
                      "   (F5 switches)"});
     lines.push_back(rates);
   }
@@ -878,6 +874,57 @@ void draw_overlays(App& app) {
 
 }  // namespace
 
+void update_tablet_mapping(App& app) {
+  app.pen.mapping =
+      tablet_mapping({app.tablet_x, app.tablet_y, app.tablet_width,
+                      app.tablet_height, app.tablet_rotation});
+}
+
+void set_tablet_area(App& app, const TabletArea& area) {
+  app.tablet_x = area.x, app.tablet_y = area.y;
+  app.tablet_width = area.width, app.tablet_height = area.height;
+  app.tablet_rotation = area.rotation;
+  update_tablet_mapping(app);
+}
+
+bool import_tablet_settings(App& app) {
+  TabletArea area;
+  if (!import_tablet_area(area, app.tablet_tip))
+    return false;
+  set_tablet_area(app, area);
+  app.tablet_area_set = true;
+  save_settings(app);
+  return true;
+}
+
+void set_pen_direct(App& app, bool on) {
+  app.pen_direct = on;
+  app.pen.in_range = app.pen.tip = false;
+  read_tablet(on);
+  // The aim's figures start over, each describing one way of reading it,
+  // and movements the other way made aren't timed.
+  auto& readout = app.readout;
+  for (LatencyStat* stat : {&readout.driver, &readout.aim_interval,
+                            &readout.aim_read, &readout.aim_wait,
+                            &readout.aim_screen})
+    *stat = {};
+  readout.moves.clear();
+  readout.waiting_moves.clear();
+  readout.driver_moves.clear();
+  if (!on) {
+    show_toast(app, "Pen: through its driver");
+    return;
+  }
+  // The first time, the area OpenTabletDriver has.
+  const bool imported = !app.tablet_area_set && import_tablet_settings(app);
+  if (listen_to_pointers() != PointerAccess::Listening)
+    show_toast(app, "Pen: read by circles once Input Monitoring is allowed");
+  else if (imported)
+    show_toast(app, "Pen: read by circles, with OpenTabletDriver's area");
+  else
+    show_toast(app, "Pen: read by circles");
+}
+
 bool app_init(App& app) {
   if (!glfwInit())
     return false;
@@ -910,6 +957,10 @@ bool app_init(App& app) {
   app.beatmap_colours = settings.beatmap_colours;
   app.readout.mode = settings.readout;
   app.readout.keyboard_interval_ms = keyboard_report_interval();
+  app.tablet_full_screen = settings.tablet_full_screen;
+  app.tablet_tip = settings.tablet_tip;
+  app.tablet_area_set = settings.tablet_area_set;
+  set_tablet_area(app, settings.tablet_area);
   if (settings.pen_direct)
     set_pen_direct(app, true);
   set_master_volume(app.audio, settings.volume);
@@ -1062,7 +1113,7 @@ void app_key(App& app, i32 key, i32 action) {
     return;
   }
   if (key == GLFW_KEY_F5 && action == GLFW_PRESS) {
-    set_pen_direct(app, !app.pen.direct);
+    set_pen_direct(app, !app.pen_direct);
     save_settings(app);
     return;
   }
@@ -1283,7 +1334,13 @@ void save_settings(const App& app) {
   file << "frame_cap=" << app.frame_cap << '\n';
   file << "cursor_size=" << app.cursor_size << '\n';
   file << "beatmap_colours=" << app.beatmap_colours << '\n';
-  file << "pen_direct=" << app.pen.direct << '\n';
+  file << "pen_direct=" << app.pen_direct << '\n';
+  file << "tablet_full_screen=" << app.tablet_full_screen << '\n';
+  file << "tablet_tip=" << app.tablet_tip << '\n';
+  if (app.tablet_area_set)
+    file << "tablet_area=" << app.tablet_x << ' ' << app.tablet_y << ' '
+         << app.tablet_width << ' ' << app.tablet_height << ' '
+         << app.tablet_rotation << '\n';
   file << "readout=" << app.readout.mode << '\n';
 }
 

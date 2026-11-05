@@ -97,11 +97,11 @@ keyboard reports every 8.0 ms   aim every 0.99 ms
   between cursor movements.
 
 Figures are medians of the last 30 samples, refreshed four times a second
-and shown to hundredths under 1 ms. A median of a whole path needn't equal
-its stages' medians added up. The screen's output and totals are full
-screen only (`-` windowed: macOS doesn't tell an app when its window's
-frame reaches the display), and an input read over 100 ms late, as while a
-map loads, is left out.
+and shown to hundredths under 1 ms; one with no new sample for 3 seconds
+reads `-`. A median of a whole path needn't equal its stages' medians added
+up. The screen's output and totals are full screen only (`-` windowed:
+macOS doesn't tell an app when its window's frame reaches the display), and
+an input read over 100 ms late, as while a map loads, is left out.
 
 To measure further: F8 records a profile to `perf/` (F8 again saves it)
 for `tools/perf_summary.py`. In full screen the profile also times each
@@ -109,7 +109,8 @@ frame from the start of its drawing to the display showing it.
 
 ## Tablet
 
-F5 switches how the pen aims, and is saved in `settings.txt`:
+F5, or the Tablet page of the settings (Ctrl+O, then Tab), switches how the
+pen aims:
 
 - **Through its driver**, the default: the cursor macOS gets from the
   tablet's driver, such as OpenTabletDriver.
@@ -120,16 +121,24 @@ F5 switches how the pen aims, and is saved in `settings.txt`:
 
 Reading the tablet needs the Input Monitoring permission, which F5 asks for.
 So far it reads one tablet, the One by Wacom S (CTL-472), decoding its
-reports as OpenTabletDriver does. It maps them with the area set in
-OpenTabletDriver (its `settings.json`), by OpenTabletDriver's own arithmetic,
-so the cursor lands where OpenTabletDriver's would. The tip clicks the left
-button past OpenTabletDriver's tip threshold; the side buttons aren't read.
+reports as OpenTabletDriver does. circles switches it to sending pen reports
+itself, so no driver needs to run; switching back, or quitting, gives the
+tablet its previous mode again. While the pen is in range, a driver's cursor
+and clicks are ignored; a mouse or trackpad still works.
 
-circles switches the tablet to sending pen reports itself, as
-OpenTabletDriver does, so OpenTabletDriver needn't be running. Switching
-back, or quitting, gives the tablet its previous mode again. While the pen
-is in range, its driver's cursor and clicks are ignored; a mouse or
-trackpad still works.
+The Tablet page sets:
+
+- **The area**: the part of the tablet that maps onto the screen, by its
+  centre and size in mm and its clockwise rotation in degrees. The first
+  time the pen is read, circles imports the area OpenTabletDriver has, if
+  any; **Import area from OpenTabletDriver** does it again. Only the tablet
+  area is imported: it maps onto the whole display, whatever display area
+  OpenTabletDriver had.
+- **Map to full screen**: on, the area maps onto the whole display, and
+  windowed, the cursor stops at the window's edges; off, it maps onto just
+  the window. In full screen they're the same.
+- **Tip pressure**: how hard, in percent of what the pen reads, the tip must
+  press to click the left button. The side buttons aren't read.
 
 ## Beatmaps
 

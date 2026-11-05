@@ -287,7 +287,8 @@ struct Backdrop {
 // Recent samples of one latency, in ms, and their median.
 struct LatencyStat {
   std::deque<f32> samples;
-  f32             ms = -1;  // the median; -1 until known
+  f64             last = -1;  // when the newest was taken, uptime
+  f32             ms = -1;    // the median; -1 while none is recent
 };
 
 // The corner readout: latency from the hands to the eyes and ears, by stage
@@ -379,13 +380,22 @@ struct App {
   // Whether a map's own combo colours replace the skin's.
   bool                     beatmap_colours = true;
   // The pen, read by circles itself rather than through its driver's
-  // cursor (F5): see tablet.h.
+  // cursor (F5; see tablet.h). Its area maps onto the whole display, or
+  // onto just the window; the cursor stays in the window either way.
+  bool                     pen_direct = false;
+  bool                     tablet_full_screen = true;
+  f32                      tablet_x = kTabletWidth / 2;  // the area, in mm
+  f32                      tablet_y = kTabletHeight / 2;
+  f32                      tablet_width = kTabletWidth;
+  f32                      tablet_height = kTabletHeight;
+  f32                      tablet_rotation = 0;  // degrees clockwise
+  f32                      tablet_tip = 1;  // pressure percent that clicks
+  // Whether the area was set, by hand or by importing OpenTabletDriver's;
+  // until then, reading the pen imports it.
+  bool                     tablet_area_set = false;
   struct Pen {
-    bool                   direct = false;
     TabletMapping          mapping;
-    Vec2                   offset{};  // virtual screen to display points
-    std::vector<PenReport> reports;   // being handled
-    f32                    tip_threshold = 1;  // pressure percent
+    std::vector<PenReport> reports;  // being handled
     bool                   in_range = false, tip = false;
     f64                    last = -1;  // when its last report arrived
   } pen;
@@ -394,6 +404,7 @@ struct App {
     f64  changed = -1e9;  // wall seconds
     bool dragging = false;
     i32  selected = 0;  // the row the keys change
+    i32  page = 0;
   } settings_menu;
 
   MainMenu               menu;
@@ -435,6 +446,9 @@ void app_drop(App& app, std::span<const char* const> paths);
 
 // window_macos.mm
 void toggle_fullscreen(App& app);
+// The display the window is on, in the window's points: its top-left
+// relative to the window's content, and its size.
+void window_screen(App& app, Vec2& origin, Vec2& size);
 
 // Fades out, switches, and fades back in.
 void switch_screen(App& app, Screen screen);
@@ -550,6 +564,12 @@ void gameplay_draw(App& app);
 void gameplay_key(App& app, i32 key, i32 action, f64 wall);
 void gameplay_click(App& app, i32 button, i32 action, f64 wall);
 void gameplay_focus_lost(App& app);
+
+// The pen read directly or through its driver; its area changed; and
+// OpenTabletDriver's area and tip threshold imported, false if it has none.
+void set_pen_direct(App& app, bool on);
+void update_tablet_mapping(App& app);
+bool import_tablet_settings(App& app);
 
 // settings_menu.cc
 void toggle_settings(App& app);
