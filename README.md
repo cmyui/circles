@@ -97,15 +97,48 @@ keyboard reports every 8.0 ms   aim every 0.99 ms
   between cursor movements.
 
 Figures are medians of the last 30 samples, refreshed four times a second
-and shown to hundredths under 1 ms. A median of a whole path needn't equal
-its stages' medians added up. The screen's output and totals are full
-screen only (`-` windowed: macOS doesn't tell an app when its window's
-frame reaches the display), and an input read over 100 ms late, as while a
-map loads, is left out.
+and shown to hundredths under 1 ms; one with no new sample for 3 seconds
+reads `-`. A median of a whole path needn't equal its stages' medians added
+up. The screen's output and totals are full screen only (`-` windowed:
+macOS doesn't tell an app when its window's frame reaches the display), and
+an input read over 100 ms late, as while a map loads, is left out.
 
 To measure further: F8 records a profile to `perf/` (F8 again saves it)
 for `tools/perf_summary.py`. In full screen the profile also times each
 frame from the start of its drawing to the display showing it.
+
+## Tablet
+
+F5, or the Tablet page of the settings (Ctrl+O, then Tab), switches how the
+pen aims:
+
+- **Through its driver**, the default: the cursor macOS gets from the
+  tablet's driver, such as OpenTabletDriver.
+- **Read by circles**: circles reads the tablet's own reports and places the
+  cursor itself, skipping the driver and macOS's cursor events. In the stage
+  table, aim to screen then has no driver stage, and its read runs from a
+  report reaching macOS to the game using it.
+
+Reading the tablet needs the Input Monitoring permission, which F5 asks for.
+So far it reads one tablet, the One by Wacom S (CTL-472), decoding its
+reports as OpenTabletDriver does. circles switches it to sending pen reports
+itself, so no driver needs to run; switching back, or quitting, gives the
+tablet its previous mode again. While the pen is in range, a driver's cursor
+and clicks are ignored; a mouse or trackpad still works.
+
+The Tablet page sets:
+
+- **The area**: the part of the tablet that maps onto the screen, by its
+  centre and size in mm and its clockwise rotation in degrees. The first
+  time the pen is read, circles imports the area OpenTabletDriver has, if
+  any; **Import area from OpenTabletDriver** does it again. Only the tablet
+  area is imported: it maps onto the whole display, whatever display area
+  OpenTabletDriver had.
+- **Map to full screen**: on, the area maps onto the whole display, and
+  windowed, the cursor stops at the window's edges; off, it maps onto just
+  the window. In full screen they're the same.
+- **Tip pressure**: how hard, in percent of what the pen reads, the tip must
+  press to click the left button. The side buttons aren't read.
 
 ## Beatmaps
 
@@ -171,6 +204,7 @@ with them. Hidden and Flashlight make S and SS grades silver.
 | F10 | Mouse buttons on or off for hitting, saved in `settings.txt` |
 | F11 | Full screen, as the window's green button enters it: the display keeps its resolution |
 | F6 | Latency readout: a line, a table of stages, or hidden; saved in `settings.txt` |
+| F5 | The pen: read by circles, or through its driver (see Tablet); saved in `settings.txt` |
 | F1 | Mod select (song select) |
 
 In song select, type to search, use the arrow keys to choose, Enter to play
