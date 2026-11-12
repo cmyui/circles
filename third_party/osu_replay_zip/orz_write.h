@@ -413,11 +413,65 @@ bool osr_to_orz(std::span<const u8> osr, std::vector<u8>& out, orz_state& state)
 	return !out.empty();
 }
 
-// An .osr given in parts, by a game that holds the replay as frames: `osr` is the .osr with no replay data (a length of
-// 0), `frames` what its replay text lists, the closing seed frame included. The text is taken to be as osu!stable writes
-// it, 7 significant digits and a trailing comma, so the .orz is the one osr_to_orz gives for that .osr, without the text
-// and its LZMA being made and read back on the way. false (out empty) for frames the format does not hold as frames
-// (too many, or a coordinate out of range), which osr_to_orz stores as the replay data they make.
+// frames a game holds, each coordinate as its 7 digit text gives it back, into state.output as the frames of the text
+// osu!stable writes for them (a trailing comma); false for frames the format does not hold as frames
+static bool encode_held_frames(std::span<const _osr_frame> frames, orz_state& state) {
+
+	if (frames.size() > ORZ_MAX_FRAMES)
+		return false;
+
+	const float x_limit{ state.mode() == e_mode::mania ? 16777216.f : 131072.f };
+
+	_osr replay_stream(frames.begin(), frames.end());
+
+	for (auto& f : replay_stream) {
+
+		if (!(std::abs(f.x) <= x_limit) || !(std::abs(f.y) <= 131072.f)) // catches NaN too
+			return false;
+
+		f.x = dotnet::g7_float(f.x);
+		f.y = dotnet::g7_float(f.y);
+
+	}
+
+	state.file.encode_info |= ORZ_ENCODE_INFO::trailing_comma;
+
+	state.input = replay_stream;
+
+	encode_frames(replay_stream, state);
+
+	return true;
+}
+
+// Replay data given as the frames its text lists, the closing seed frame included, by a game that holds the replay that
+// way. The text is taken to be as osu!stable writes it, 7 significant digits and a trailing comma, so the .orz is the
+// one replay_data_to_orz gives for that text's LZMA, without the text and its LZMA being made and read back on the way.
+// false (out empty) for frames the format does not hold as frames (too many, or a coordinate out of range), which
+// replay_data_to_orz stores as the replay data they make.
+bool replay_frames_to_orz(std::span<const _osr_frame> frames, e_mode mode, std::vector<u8>& out, orz_state& state) {
+
+	no_FMA_check();
+
+	try {
+
+		state.reset_volatile();
+
+		state.file.encode_info = set_e_mode(0, mode);
+
+		if (!encode_held_frames(frames, state))
+			state.output.clear();
+
+	} catch (const std::exception&) {
+		state.output.clear();
+	}
+
+	out = std::move(state.output);
+
+	return !out.empty();
+}
+
+// The same for a whole .osr: `osr` is the .osr with no replay data (a length of 0), `frames` what its replay text
+// lists. The .orz is the one osr_to_orz gives for the .osr those make.
 bool osr_frames_to_orz(std::span<const u8> osr, std::span<const _osr_frame> frames, std::vector<u8>& out, orz_state& state) {
 
 	no_FMA_check();
@@ -426,25 +480,7 @@ bool osr_frames_to_orz(std::span<const u8> osr, std::span<const _osr_frame> fram
 
 		state.reset_volatile();
 
-		_osr_header h{};
-
-		bool held{ read_osr_header(osr, h, false) && h.replay_data.empty() && frames.size() <= ORZ_MAX_FRAMES };
-
-		const float x_limit{ h.mode == e_mode::mania ? 16777216.f : 131072.f };
-
-		// each coordinate as the text gives it back
-		_osr replay_stream(frames.begin(), frames.end());
-
-		for (auto& f : replay_stream) {
-
-			held = held && std::abs(f.x) <= x_limit && std::abs(f.y) <= 131072.f; // catches NaN too
-
-			f.x = dotnet::g7_float(f.x);
-			f.y = dotnet::g7_float(f.y);
-
-		}
-
-		if (held) {
+		if (_osr_header h{}; read_osr_header(osr, h, false) && h.replay_data.empty()) {
 
 			state.osr_header.assign(h.before_life.begin(), h.before_life.end());
 			state.after_life.assign(h.after_life.begin(), h.after_life.end());
@@ -453,11 +489,10 @@ bool osr_frames_to_orz(std::span<const u8> osr, std::span<const _osr_frame> fram
 
 			state.header_rate = h.rate;
 
-			state.file.encode_info = set_e_mode(ORZ_ENCODE_INFO::has_osr_header | ORZ_ENCODE_INFO::trailing_comma, h.mode);
+			state.file.encode_info = set_e_mode(ORZ_ENCODE_INFO::has_osr_header, h.mode);
 
-			state.input = replay_stream;
-
-			encode_frames(replay_stream, state);
+			if (!encode_held_frames(frames, state))
+				state.output.clear();
 
 		}
 
