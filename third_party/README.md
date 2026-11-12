@@ -21,10 +21,10 @@ from upstream in these ways:
   replay data, makes.
 - **Replay data with no size in its LZMA header** is read
   (`decompress_osr_string`, `orz_shared.h`), ending on its end marker.
-  Replays circles saved before it used osu!'s LZMA encoder are like this.
-- **A device the caller gives, and osu!lazer's positions.** A hinted setup
+  Replays circles saved before it used stable's LZMA encoder are like this.
+- **A device the caller gives, and lazer's positions.** A hinted setup
   can be forced: the replay is coded with its device without a search. A
-  setup can be a lattice, or the two float steps osu!lazer makes a position
+  setup can be a lattice, or the two float steps lazer makes a position
   by (`chain_params`, `device_space.h`), which circles gives for a pen it
   reads; a replay in lazer's text is tried as whole pixels made that way
   (`orz_lazer.h`, a file added here). These are the library's pull requests
@@ -35,7 +35,7 @@ from upstream in these ways:
   `orz_chars.h`, a file added here.
 
 For input upstream reads, the `.orz` files written are the same, but for
-replays in osu!lazer's text that fit its whole pixels, which are smaller.
+replays in lazer's text that fit its whole pixels, which are smaller.
 
 The `.orz` format isn't final: a later osu_replay_zip may not read files this
 one wrote. Before updating it, export the replays worth keeping as `.osr`

@@ -497,7 +497,7 @@ void import_dropped_replays(App& app) {
   app.dropped_replays.clear();
   show_toast(app, imported ? "Imported " + std::to_string(imported) +
                                  (imported == 1 ? " replay" : " replays")
-                           : "Already imported, or not an osu! replay");
+                           : "Already imported, or not a replay");
 }
 
 // Imports archives the player dropped, selecting the first, and starter
@@ -533,7 +533,7 @@ void import_archives_waiting(App& app) {
     snprintf(text, sizeof(text), "Imported %zu beatmap set%s",
              imported.size(), imported.size() == 1 ? "" : "s");
     show_toast(app, select >= 0 ? text
-                                : "Imported, but it has no osu!standard maps");
+                                : "Imported, but it has no standard-mode maps");
   }
   // The old selection, renumbered, so selecting the new map compares songs
   // and starts its preview.
