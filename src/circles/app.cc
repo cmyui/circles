@@ -514,7 +514,7 @@ void import_archives_waiting(App& app) {
     snprintf(text, sizeof(text), "Imported %zu beatmap set%s",
              imported.size(), imported.size() == 1 ? "" : "s");
     show_toast(app, select >= 0 ? text
-                                : "Imported, but it has no osu!standard maps");
+                                : "Imported, but it has no standard-mode maps");
   }
   // The old selection, renumbered, so selecting the new map compares songs
   // and starts its preview.
