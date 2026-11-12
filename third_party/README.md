@@ -28,7 +28,7 @@ from upstream in these ways:
   by (`chain_params`, `device_space.h`), which circles gives for a pen it
   reads; a replay in lazer's text is tried as whole pixels made that way
   (`orz_lazer.h`, a file added here). These are the library's pull requests
-  34 and 35.
+  39 and 40.
 - **macOS 13.** libc++'s floating-point `std::from_chars` needs macOS 26 and
   `std::to_chars` 13.3; the six calls to them (in `orz_decimal.h`,
   `orz_dotnet.h`, `orz_life.h` and `orz_text.h`) go to stand-ins in
