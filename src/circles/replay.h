@@ -41,6 +41,10 @@ struct Replay {
   std::vector<ReplayFrame> frames;
 };
 
+// The input as an .osr stores it before compression, written as osu!stable
+// writes it: "w|x|y|keys," per frame, then the seed frame.
+std::string replay_frames_text(const std::vector<ReplayFrame>& frames);
+
 std::vector<u8> encode_replay(const Replay& replay);
 // Nothing if the data is malformed or not an osu!standard replay. Without
 // `with_frames` the input isn't decompressed, for listing replays quickly.

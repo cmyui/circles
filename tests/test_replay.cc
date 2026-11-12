@@ -46,6 +46,34 @@ static void test_replays_round_trip() {
   CHECK_EQ(decoded->frames[3].keys, circles::kReplayMouse2);
 }
 
+// osu! and tools that read its replays take the frames' text and its LZMA
+// header as osu!stable writes them.
+static void test_frames_are_written_as_stable_writes_them() {
+  const auto text = [](circles::f32 x, circles::f32 y) {
+    return circles::replay_frames_text({{16, {x, y}, 5}});
+  };
+  const std::string seed = "-12345|0|0|0,";
+  // Up to 7 significant digits, with no trailing zeros.
+  CHECK_EQ(text(256, -500), "16|256|-500|5," + seed);
+  CHECK_EQ(text(100.25f, 316.684235f), "16|100.25|316.6842|5," + seed);
+  // A half rounds away from zero, and negative zero has no sign.
+  CHECK_EQ(text(0.48828125f, -0.0f), "16|0.4882813|0|5," + seed);
+  CHECK_EQ(text(0.001f, 9999999), "16|0.001|9999999|5," + seed);
+  CHECK_EQ(text(0.00001f, 12345678), "16|1E-05|1.234568E+07|5," + seed);
+
+  // With no strings but the frames' hash, the compressed frames start 77
+  // bytes in: the LZMA properties, the dictionary's size, the text's length.
+  const auto data = circles::encode_replay({});
+  CHECK(data.size() > 90);
+  if (data.size() <= 90)
+    return;
+  CHECK_EQ(data[77], 0x5d);
+  CHECK_EQ(data[78] | data[79] << 8 | data[80] << 16 | data[81] << 24, 1 << 21);
+  CHECK_EQ(data[82], seed.size());
+  for (int i = 83; i < 90; ++i)
+    CHECK_EQ(data[i], 0);
+}
+
 static void test_listing_skips_frames() {
   circles::Replay replay;
   replay.frames = {{0, {0, 0}, 0}};
@@ -67,6 +95,7 @@ static void test_malformed_replays_are_rejected() {
 
 int main() {
   test_replays_round_trip();
+  test_frames_are_written_as_stable_writes_them();
   test_listing_skips_frames();
   test_malformed_replays_are_rejected();
   return test_result();

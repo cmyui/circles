@@ -39,21 +39,31 @@ const Color kColourMiss = hex_color(0xFF4466);
 struct Playfield {
   f32 scale;  // window points per osu! pixel
   f32 x, y;   // top-left corner
+  f64 ratio;  // the scale before its rounding to an f32
 
   Vec2 to_screen(Vec2 p) const { return {x + p.x * scale, y + p.y * scale}; }
+  // With stable's arithmetic, so a cursor lands on the float stable would
+  // record: the offset comes off in single precision, and the division is by
+  // the unrounded ratio, as stable's x87 code keeps it.
   Vec2 to_playfield(Vec2 p) const {
-    return {(p.x - x) / scale, (p.y - y) / scale};
+    return {static_cast<f32>(static_cast<f64>(p.x - x) / ratio),
+            static_cast<f32>(static_cast<f64>(p.y - y) / ratio)};
   }
 };
 
 // Stable shortens windows squarer than 5:4 to that shape; here that game
-// area is centred in the window instead.
+// area is centred in the window instead. Each step is stable's, in single
+// precision: its window ratio, its game field's size from that, and the
+// field's ratio and offsets from the size.
 Playfield playfield(const App& app) {
   const f32 height = std::min(app.height, std::trunc(app.width * 0.8f));
-  const f32 scale = height / 480;
-  return {scale, (app.width - kPlayfieldWidth * scale) / 2,
-          (app.height - height) / 2 +
-              (height - kPlayfieldHeight * scale) * 0.75f - 16 * scale};
+  const f32 window_ratio = height / 480;
+  const f32 field_width = kPlayfieldWidth * window_ratio;
+  const f32 field_height = kPlayfieldHeight * window_ratio;
+  return {field_height / kPlayfieldHeight, (app.width - field_width) / 2,
+          (height - field_height) / 4 * 3 + -16 * window_ratio +
+              (app.height - height) / 2,
+          static_cast<f64>(field_height) / kPlayfieldHeight};
 }
 
 const Vec2 kPlayfieldCentre{kPlayfieldWidth / 2, kPlayfieldHeight / 2};
