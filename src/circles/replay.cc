@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <fstream>
 #include <iterator>
 #include <lzma.h>
@@ -113,18 +114,33 @@ class Reader {
   bool                ok_ = true;
 };
 
-// LZMA in the "alone" (.lzma) container osu! uses.
+// LZMA in the "alone" (.lzma) container, with the header osu! writes: its
+// properties (lc 3, lp 0, pb 2), a 2 MiB dictionary, then the text's length.
+// The stream has no end marker. liblzma's own alone encoder writes the length
+// as unknown and ends on a marker, which a reader that takes the length from
+// the header rejects.
 std::vector<u8> compress(std::string_view text) {
   lzma_options_lzma options;
   lzma_lzma_preset(&options, LZMA_PRESET_DEFAULT);
-  lzma_stream stream = LZMA_STREAM_INIT;
-  if (lzma_alone_encoder(&stream, &options) != LZMA_OK)
+  options.dict_size = 1 << 21;
+  options.ext_flags = 0;  // no end marker
+  options.ext_size_low = static_cast<u32>(text.size());
+  options.ext_size_high = static_cast<u32>(static_cast<u64>(text.size()) >> 32);
+  const lzma_filter filters[] = {{LZMA_FILTER_LZMA1EXT, &options},
+                                 {LZMA_VLI_UNKNOWN, nullptr}};
+  lzma_stream       stream = LZMA_STREAM_INIT;
+  if (lzma_raw_encoder(&stream, filters) != LZMA_OK)
     return {};
+  Writer header;
+  header.put_u8(
+      static_cast<u8>((options.pb * 5 + options.lp) * 9 + options.lc));
+  header.put_i32(static_cast<i32>(options.dict_size));
+  header.put_i64(static_cast<i64>(text.size()));
+  std::vector<u8> out = header.take();
   stream.next_in = reinterpret_cast<const u8*>(text.data());
   stream.avail_in = text.size();
-  std::vector<u8> out;
-  u8              buffer[1 << 16];
-  lzma_ret        result;
+  u8       buffer[1 << 16];
+  lzma_ret result;
   do {
     stream.next_out = buffer;
     stream.avail_out = sizeof(buffer);
@@ -156,23 +172,74 @@ std::optional<std::string> decompress(std::span<const u8> data) {
   return out;
 }
 
-std::string encode_frames(const std::vector<ReplayFrame>& frames) {
+// A coordinate as osu!stable prints a float (.NET Framework's default, "G7"):
+// 7 significant digits, a half rounding away from zero, trailing zeros
+// dropped, and an exponent ("1.5E-05") below 0.0001 or from 10 million up.
+void append_coordinate(std::string& text, f32 value) {
+  if (value == 0) {
+    text += '0';
+    return;
+  }
+  // "d.ddd...e+xx", with every digit the float has, so the 8th is exact.
+  char digits[64];
+  snprintf(digits, sizeof(digits), "%.40e", static_cast<f64>(std::abs(value)));
+  i32 exponent = std::atoi(std::strchr(digits, 'e') + 1);
+  i32 mantissa = digits[0] - '0';
+  for (i32 i = 2; i < 8; ++i)
+    mantissa = mantissa * 10 + (digits[i] - '0');
+  if (digits[8] >= '5' && ++mantissa == 10000000) {
+    mantissa = 1000000;
+    ++exponent;
+  }
+  char d[8];
+  snprintf(d, sizeof(d), "%d", mantissa);
+  i32 count = 7;
+  while (count > 1 && d[count - 1] == '0')
+    --count;
+  if (value < 0)
+    text += '-';
+  if (exponent < -4 || exponent > 6) {
+    text += d[0];
+    if (count > 1)
+      text.append(".").append(d + 1, count - 1);
+    char suffix[8];
+    snprintf(suffix, sizeof(suffix), "E%c%02d", exponent < 0 ? '-' : '+',
+             std::abs(exponent));
+    text += suffix;
+  } else if (exponent < 0) {
+    text.append("0.").append(-exponent - 1, '0').append(d, count);
+  } else {
+    const i32 whole = exponent + 1;
+    text.append(d, std::min(count, whole));
+    if (count < whole)
+      text.append(whole - count, '0');
+    else if (count > whole)
+      text.append(".").append(d + whole, count - whole);
+  }
+}
+
+}  // namespace
+
+std::string replay_frames_text(const std::vector<ReplayFrame>& frames) {
   std::string text;
   i64         previous = 0;
-  char        frame[96];
   for (const auto& f : frames) {
     // Whole-ms deltas from whole-ms times, so rounding never accumulates.
     const i64 time = std::llround(f.time);
-    snprintf(frame, sizeof(frame), "%lld|%.2f|%.2f|%u,",
-             static_cast<long long>(time - previous), f.position.x,
-             f.position.y, f.keys);
-    text += frame;
+    text += std::to_string(time - previous);
+    text += '|';
+    append_coordinate(text, f.position.x);
+    text += '|';
+    append_coordinate(text, f.position.y);
+    text += '|';
+    text += std::to_string(f.keys);
+    text += ',';
     previous = time;
   }
-  snprintf(frame, sizeof(frame), "%lld|0|0|0,",
-           static_cast<long long>(kSeedFrame));
-  return text + frame;
+  return text + std::to_string(kSeedFrame) + "|0|0|0,";
 }
+
+namespace {
 
 std::vector<ReplayFrame> decode_frames(const std::string& text) {
   std::vector<ReplayFrame> frames;
@@ -197,7 +264,7 @@ std::vector<ReplayFrame> decode_frames(const std::string& text) {
 }  // namespace
 
 std::vector<u8> encode_replay(const Replay& replay) {
-  const std::string     frames = encode_frames(replay.frames);
+  const std::string     frames = replay_frames_text(replay.frames);
   const std::vector<u8> compressed = compress(frames);
   const auto            count = [](i32 n) {
     return static_cast<u16>(std::clamp(n, 0, 0xFFFF));
