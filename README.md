@@ -36,9 +36,8 @@ such as Input Monitoring.
 
 macOS only: rendering uses Metal. Needs CMake and Apple's command line
 tools (`xcode-select --install`, then `brew install cmake`). The first build
-downloads GLFW, built into the app, and liblzma's headers (replays' LZMA
-compression uses macOS's own liblzma) into `build/_deps`, where later
-builds find them.
+downloads GLFW, built into the app, into `build/_deps`, where later builds
+find it.
 
 ```sh
 make run     # build into build/ and start the game
@@ -227,15 +226,21 @@ Elements a skin leaves out keep the built-in look.
 ## Replays
 
 Every finished play is saved to `replays/` as an `.orz`: an osu! replay
-(`.osr`) compressed losslessly by
-[osu_replay_zip](https://github.com/rumoi/osu_replay_zip). Its `orz` tool
-turns an `.orz` back into the `.osr`, byte for byte, for osu! to open. The
-results screen's Watch button (or W) plays a replay back; song select lists
-the selected difficulty's replays, best first, and clicking one plays it
-back. Replays from osu!, as `.osr` or `.orz`, dropped into `replays/` are
-listed once their beatmap is in `beatmaps/`: a replay names its beatmap by
-the MD5 hash of the `.osu` file, so it needs that exact version. Space skips
-a replay's intro and Esc pauses it.
+compressed losslessly by
+[osu_replay_zip](https://github.com/rumoi/osu_replay_zip). The results
+screen's Watch button (or W) plays a replay back; song select lists the
+selected difficulty's replays, best first, and clicking one plays it back.
+Space skips a replay's intro and Esc pauses it.
+
+osu!'s own `.osr` replays go in and out:
+
+- **Export.** F2 on the results screen writes the replay to `exports/` as
+  both an `.osr`, for osu! to open, and an `.orz`.
+- **Import.** Drop an `.osr` or `.orz` on the window, or put it in
+  `replays/`. An `.osr` is kept as the `.orz` that gives it back byte for
+  byte; one put in `replays/` is removed once that `.orz` is written. A
+  replay is listed once its beatmap is in `beatmaps/`: it names its beatmap
+  by the MD5 hash of the `.osu` file, so it needs that exact version.
 
 ## Mods
 

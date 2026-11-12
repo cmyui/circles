@@ -1,8 +1,8 @@
 #pragma once
 
-// osu! replays (.osr): a play's result and its input, frame by frame. The
-// input is LZMA-compressed text, "w|x|y|keys," per frame, where w is the ms
-// since the previous frame and x, y are in osu! pixels.
+// Replays: a play's result and its input, frame by frame. They are kept as
+// .orz files (orz.h), which hold what osu!'s .osr does, so a replay can be
+// exchanged with osu! as one.
 
 #include <circles/math.h>
 #include <circles/rules.h>
@@ -41,21 +41,33 @@ struct Replay {
   std::vector<ReplayFrame> frames;
 };
 
-// The input as an .osr stores it before compression, written as osu!stable
-// writes it: "w|x|y|keys," per frame, then the seed frame.
-std::string replay_frames_text(const std::vector<ReplayFrame>& frames);
-
+// A replay as an .orz. Empty if it can't be made: a frame further than
+// 131072 osu! pixels out.
 std::vector<u8> encode_replay(const Replay& replay);
 // Nothing if the data is malformed or not an osu!standard replay. Without
-// `with_frames` the input isn't decompressed, for listing replays quickly.
+// `with_frames` the input isn't decoded, for listing replays quickly.
 std::optional<Replay> decode_replay(std::span<const u8> data,
                                     bool                with_frames = true);
 
-// A replay file is an .osr, or an .orz (orz.h) holding one: reading tells
-// them apart by their contents, and writing by the path's extension.
 std::optional<Replay> read_replay(const std::filesystem::path& path,
                                   bool with_frames = true);
 bool write_replay(const std::filesystem::path& path, const Replay& replay);
+
+// Exchanging replays with osu! and other copies of the game. An .osr goes in
+// as the .orz that gives it back byte for byte, and comes out the same way.
+
+// Brings the replay at `source`, an .osr or an .orz, into `directory` as an
+// .orz of the same name. Returns its path there, or nothing if it isn't an
+// osu!standard replay or one of that name is already there.
+std::filesystem::path import_replay(const std::filesystem::path& source,
+                                    const std::filesystem::path& directory);
+// Imports each .osr lying in `directory`, removing it once its .orz gives it
+// back byte for byte. Returns how many came in.
+i32 import_osr_replays(const std::filesystem::path& directory);
+// Writes the replay at `path`, an .orz, into `directory` as both an .osr and
+// an .orz of its name. False if either can't be written.
+bool export_replay(const std::filesystem::path& path,
+                   const std::filesystem::path& directory);
 
 // A replay file's result, without its frames.
 struct ReplayEntry {

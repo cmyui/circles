@@ -939,6 +939,49 @@ inline bool decompress_osr_string(const u8* data, size_t size, std::string& out)
 	if (size <= 5 + 8)
 		return false;
 
+	// no size in the header (all ones, as liblzma's .lzma writer leaves it): the stream ends on its end marker
+	if (u64 size64; memcpy(&size64, data + 5, 8), size64 == ~0ull) {
+
+		CLzmaDec dec;
+
+		LzmaDec_Construct(&dec);
+
+		if (LzmaDec_Allocate(&dec, data, 5, &lzma_allocFuncs) != SZ_OK)
+			return false;
+
+		LzmaDec_Init(&dec);
+
+		const u8* src{ data + 5 + 8 };
+		size_t left{ size - (5 + 8) };
+
+		ELzmaStatus status{};
+		bool ok{ true };
+
+		do {
+
+			u8 chunk[1 << 16];
+
+			SizeT made{ sizeof chunk }, used{ left };
+
+			ok = LzmaDec_DecodeToBuf(&dec, chunk, &made, src, &used, LZMA_FINISH_ANY, &status) == SZ_OK;
+
+			out.append((const char*)chunk, made);
+
+			src += used;
+			left -= used;
+
+			ok = ok && out.size() <= ORZ_MAX_STREAM && (made || used || status == LZMA_STATUS_FINISHED_WITH_MARK);
+
+		} while (ok && status != LZMA_STATUS_FINISHED_WITH_MARK);
+
+		LzmaDec_Free(&dec, &lzma_allocFuncs);
+
+		if (!ok)
+			out.clear();
+
+		return ok;
+	}
+
 	u32 text_size;
 
 	memcpy(&text_size, data + 5, 4);

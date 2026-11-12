@@ -57,7 +57,7 @@ inline void finish_orz_file(u32 frame_count, u32 crc, orz_state& state) {
 	if (!(state.file.encode_info & ORZ_ENCODE_INFO::replay_verbatim)) {
 
 		for (const auto& c : state.file.container)
-			if (c.tag == orz_tag::frames && c.data.size() >= state.lzma.size())
+			if (c.tag == orz_tag::frames && state.lzma.size() && c.data.size() >= state.lzma.size())
 				return write_verbatim(state);
 
 	}
@@ -124,10 +124,11 @@ struct _osr_header {
 
 };
 
-// false for anything that is not an .osr of one of the four game modes
-inline bool read_osr_header(std::span<const u8> osr, _osr_header& h) {
+// false for anything that is not an .osr of one of the four game modes. An .osr given in parts (osr_frames_to_orz) has
+// no replay data, and can be shorter than a whole one ever is.
+inline bool read_osr_header(std::span<const u8> osr, _osr_header& h, bool whole = true) {
 
-	if (osr.size() < 128 || osr[0] > 3)
+	if (osr.size() < (whole ? 128u : 1u) || osr[0] > 3)
 		return false;
 
 	size_t pos{};
@@ -259,6 +260,8 @@ inline bool read_osr_header(std::span<const u8> osr, _osr_header& h) {
 	return true;
 }
 
+static void encode_frames(_osr& replay_stream, orz_state& state);
+
 // LZMA replay data into state.output, with the e_mode of state.file (and the .osr parts in state, when it has them)
 static void encode_replay_data(std::span<const u8> lzma, orz_state& state) {
 
@@ -323,6 +326,18 @@ static void encode_replay_data(std::span<const u8> lzma, orz_state& state) {
 		return;
 	}
 
+	encode_frames(replay_stream, state);
+
+	const bool coded{ !(state.file.encode_info & ORZ_ENCODE_INFO::replay_verbatim) };
+
+	if (coded && (state.options & ENCODE_CHECK_ROUND_TRIP) && !orz_round_trip_ok(state.output, state.text, state.tables))
+		write_verbatim(state);
+
+}
+
+// frames the format holds into state.output: the closing seed frame goes to the header
+static void encode_frames(_osr& replay_stream, orz_state& state) {
+
 	state.seed = {};
 
 	if (replay_stream.size()) {
@@ -339,11 +354,6 @@ static void encode_replay_data(std::span<const u8> lzma, orz_state& state) {
 	}
 
 	encode_replay(replay_stream, state);
-
-	const bool coded{ !(state.file.encode_info & ORZ_ENCODE_INFO::replay_verbatim) };
-
-	if (coded && (state.options & ENCODE_CHECK_ROUND_TRIP) && !orz_round_trip_ok(state.output, state.text, state.tables))
-		write_verbatim(state);
 
 }
 
@@ -391,6 +401,63 @@ bool osr_to_orz(std::span<const u8> osr, std::vector<u8>& out, orz_state& state)
 			state.file.encode_info = set_e_mode(ORZ_ENCODE_INFO::has_osr_header, h.mode);
 
 			encode_replay_data(h.replay_data, state);
+
+		}
+
+	} catch (const std::exception&) {
+		state.output.clear();
+	}
+
+	out = std::move(state.output);
+
+	return !out.empty();
+}
+
+// An .osr given in parts, by a game that holds the replay as frames: `osr` is the .osr with no replay data (a length of
+// 0), `frames` what its replay text lists, the closing seed frame included. The text is taken to be as osu!stable writes
+// it, 7 significant digits and a trailing comma, so the .orz is the one osr_to_orz gives for that .osr, without the text
+// and its LZMA being made and read back on the way. false (out empty) for frames the format does not hold as frames
+// (too many, or a coordinate out of range), which osr_to_orz stores as the replay data they make.
+bool osr_frames_to_orz(std::span<const u8> osr, std::span<const _osr_frame> frames, std::vector<u8>& out, orz_state& state) {
+
+	no_FMA_check();
+
+	try {
+
+		state.reset_volatile();
+
+		_osr_header h{};
+
+		bool held{ read_osr_header(osr, h, false) && h.replay_data.empty() && frames.size() <= ORZ_MAX_FRAMES };
+
+		const float x_limit{ h.mode == e_mode::mania ? 16777216.f : 131072.f };
+
+		// each coordinate as the text gives it back
+		_osr replay_stream(frames.begin(), frames.end());
+
+		for (auto& f : replay_stream) {
+
+			held = held && std::abs(f.x) <= x_limit && std::abs(f.y) <= 131072.f; // catches NaN too
+
+			f.x = dotnet::g7_float(f.x);
+			f.y = dotnet::g7_float(f.y);
+
+		}
+
+		if (held) {
+
+			state.osr_header.assign(h.before_life.begin(), h.before_life.end());
+			state.after_life.assign(h.after_life.begin(), h.after_life.end());
+			state.tail.assign(h.tail.begin(), h.tail.end());
+			state.life = std::move(h.life);
+
+			state.header_rate = h.rate;
+
+			state.file.encode_info = set_e_mode(ORZ_ENCODE_INFO::has_osr_header | ORZ_ENCODE_INFO::trailing_comma, h.mode);
+
+			state.input = replay_stream;
+
+			encode_frames(replay_stream, state);
 
 		}
 

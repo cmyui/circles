@@ -27,6 +27,7 @@ constexpr i32         kFaceHeavy = 8;
 constexpr const char* kBeatmapDirectory = "beatmaps";
 constexpr const char* kSkinDirectory = "skins";
 constexpr const char* kReplayDirectory = "replays";
+constexpr const char* kExportDirectory = "exports";
 constexpr const char* kSettingsPath = "settings.txt";
 
 // Downloaded into an empty library one by one, smallest first, so the first
@@ -479,6 +480,24 @@ void import_dropped_skins(App& app) {
   }
   use_skin(app, index);
   show_toast(app, "Skin: " + app.skin.config.name);
+}
+
+// Imports the replays the player dropped, and lists them.
+void import_dropped_replays(App& app) {
+  size_t imported = 0;
+  for (const auto& source : app.dropped_replays) {
+    const auto path = import_replay(source, kReplayDirectory);
+    if (path.empty())
+      continue;
+    if (auto replay = read_replay(path, false)) {
+      app.replays.push_back({path, std::move(*replay)});
+      ++imported;
+    }
+  }
+  app.dropped_replays.clear();
+  show_toast(app, imported ? "Imported " + std::to_string(imported) +
+                                 (imported == 1 ? " replay" : " replays")
+                           : "Already imported, or not an osu! replay");
 }
 
 // Imports archives the player dropped, selecting the first, and starter
@@ -1081,6 +1100,7 @@ bool app_init(App& app) {
   use_skin(app,
            skin_index_of(app, new_skin.empty() ? settings.skin : new_skin));
   app.library = scan_library(kBeatmapDirectory);
+  import_osr_replays(kReplayDirectory);
   app.replays = scan_replays(kReplayDirectory);
   printf("%zu beatmaps in %zu sets, %zu replays\n", app.library.maps.size(),
          app.library.sets.size(), app.replays.size());
@@ -1159,6 +1179,8 @@ void app_update(App& app, f64 now) {
       import_dropped_skins(app);
     if (!app.dropped.empty() || app.starters.waiting)
       import_archives_waiting(app);
+    if (!app.dropped_replays.empty())
+      import_dropped_replays(app);
   }
   for (auto* trail : {&app.trail, &app.game.replay_trail})
     while (!trail->empty() && now - trail->front().time > kTrailLength)
@@ -1362,12 +1384,15 @@ void app_drop(App& app, std::span<const char* const> paths) {
       app.dropped.emplace_back(path);
     else if (extension == ".osk")
       app.dropped_skins.emplace_back(path);
+    else if (extension == ".osr" || extension == ".orz")
+      app.dropped_replays.emplace_back(path);
     else
       continue;
     ++queued;
   }
   if (!queued)
-    show_toast(app, "Drop .osz beatmaps or .osk skins to import them");
+    show_toast(app,
+               "Drop .osz beatmaps, .osk skins or replays to import them");
   else if (app.screen == Screen::Gameplay || app.screen == Screen::Results)
     show_toast(app, "Importing once you're back at song select");
 }
@@ -1525,6 +1550,13 @@ std::string save_replay(App& app, i32 map, Replay replay) {
   replay.frames.clear();
   app.replays.push_back({path, std::move(replay)});
   return path.string();
+}
+
+void export_saved_replay(App& app, const std::string& path) {
+  show_toast(app, export_replay(path, kExportDirectory)
+                      ? std::string("Exported to ") + kExportDirectory +
+                            "/ as .osr and .orz"
+                      : "Couldn't export the replay");
 }
 
 std::vector<const ReplayEntry*> map_replays(const App& app, i32 map) {

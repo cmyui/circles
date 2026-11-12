@@ -108,6 +108,28 @@ bool orz_decode_frames(std::span<const u8> raw_bytes, _decoded_orz& out, const u
 	return orz_decode_frames(raw_bytes, out, tables, options);
 }
 
+// The .osr a file's parts make with no life bar and no replay data (a length of 0), for a game that takes the replay as
+// frames (orz_decode_frames) and only reads the .osr's fields; empty for a file that holds no .osr.
+std::vector<u8> osr_fields(const _orz_file& file) {
+
+	std::vector<u8> out;
+
+	if (!(file.encode_info & ORZ_ENCODE_INFO::has_osr_header))
+		return out;
+
+	const auto parts{ osr_parts::decode(container_data(file, orz_tag::osr_meta_data)) };
+
+	add_to_u8(out, parts.header);
+
+	out.push_back(0x00);
+
+	add_to_u8(out, parts.after_life);
+	add_to_u8(out, (u32)0);
+	add_to_u8(out, parts.tail);
+
+	return out;
+}
+
 std::string replay_text(const std::vector<_osr_frame>& R, const _orz_file& file) {
 
 	const u32 info{ file.encode_info };
