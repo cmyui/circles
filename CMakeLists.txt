@@ -40,10 +40,14 @@ FetchContent_Declare(xz
   SOURCE_SUBDIR src/liblzma/api)
 FetchContent_MakeAvailable(glfw xz)
 
-# Single-header libraries (miniaudio, stb), compiled once as C. Their headers
-# are system includes so our warnings don't apply to them.
-add_library(circles_third_party STATIC src/circles/third_party.c)
-target_include_directories(circles_third_party SYSTEM PUBLIC third_party)
+# Single-header libraries (miniaudio, stb) and the LZMA decoder osu_replay_zip
+# reads replay data with, compiled once as C. Their headers are system
+# includes so our warnings don't apply to them.
+add_library(circles_third_party STATIC
+  src/circles/third_party.c
+  third_party/osu_replay_zip/Lib/LzmaDec.c)
+target_include_directories(circles_third_party SYSTEM PUBLIC
+  third_party third_party/osu_replay_zip/Lib)
 target_compile_definitions(circles_third_party PRIVATE MA_NO_RUNTIME_LINKING)
 target_link_libraries(circles_third_party PUBLIC
   "-framework AudioToolbox" "-framework CoreAudio" "-framework CoreFoundation")
@@ -65,6 +69,7 @@ add_library(circles_core STATIC
   src/circles/menu.cc
   src/circles/mod_select.cc
   src/circles/mods.cc
+  src/circles/orz.cc
   src/circles/profiler.cc
   src/circles/profiler_macos.mm
   src/circles/replay.cc

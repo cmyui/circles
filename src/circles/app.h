@@ -531,7 +531,7 @@ void save_settings(const App& app);
 // nothing if it couldn't be written.
 std::string save_replay(App& app, i32 map, Replay replay);
 // The local leaderboard of `map`: its replays, best score first. The
-// replays folder is the score store, each .osr holding its score. If it
+// replays folder is the score store, each replay holding its score. If it
 // outgrows scanning at startup, or scores need data an .osr can't hold, a
 // database (e.g. SQLite) may be worth adding.
 std::vector<const ReplayEntry*> map_replays(const App& app, i32 map);

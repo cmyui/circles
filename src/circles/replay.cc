@@ -1,4 +1,5 @@
 #include <circles/md5.h>
+#include <circles/orz.h>
 #include <circles/replay.h>
 #include <circles/strings.h>
 
@@ -306,12 +307,24 @@ std::optional<Replay> read_replay(const fs::path& path, bool with_frames) {
   std::ifstream         file(path, std::ios::binary);
   const std::vector<u8> data((std::istreambuf_iterator<char>(file)),
                              std::istreambuf_iterator<char>());
-  return decode_replay(data, with_frames);
+  if (!is_orz(data))
+    return decode_replay(data, with_frames);
+  const auto orz = read_orz(data, with_frames);
+  if (!orz)
+    return std::nullopt;
+  auto replay = decode_replay(orz->osr, false);
+  if (replay)
+    replay->frames = decode_frames(orz->frames);
+  return replay;
 }
 
 bool write_replay(const fs::path& path, const Replay& replay) {
-  const std::vector<u8> data = encode_replay(replay);
-  std::error_code       error;
+  std::vector<u8> data = encode_replay(replay);
+  if (lowercase(path.extension().string()) == ".orz")
+    data = orz_from_osr(data);
+  if (data.empty())
+    return false;
+  std::error_code error;
   fs::create_directories(path.parent_path(), error);
   std::ofstream file(path, std::ios::binary);
   file.write(reinterpret_cast<const char*>(data.data()),
@@ -323,8 +336,9 @@ std::vector<ReplayEntry> scan_replays(const fs::path& directory) {
   std::vector<ReplayEntry> entries;
   std::error_code          error;
   for (const auto& entry : fs::directory_iterator(directory, error)) {
+    const std::string extension = lowercase(entry.path().extension().string());
     if (!entry.is_regular_file() ||
-        lowercase(entry.path().extension().string()) != ".osr")
+        (extension != ".osr" && extension != ".orz"))
       continue;
     if (auto replay = read_replay(entry.path(), false))
       entries.push_back({entry.path(), std::move(*replay)});

@@ -1519,7 +1519,7 @@ std::string save_replay(App& app, i32 map, Replay replay) {
   const auto path =
       std::filesystem::path(kReplayDirectory) /
       file_name_safe(replay.player + " - " + info.artist + " - " + info.title +
-                     " [" + info.version + "] (" + date + ").osr");
+                     " [" + info.version + "] (" + date + ").orz");
   if (!write_replay(path, replay))
     return {};
   replay.frames.clear();

@@ -15,9 +15,9 @@ circles::App& app_of(GLFWwindow* window) {
   return *static_cast<circles::App*>(glfwGetWindowUserPointer(window));
 }
 
-// For measuring: `--benchmark <replay.osr>` watches a replay silently while
-// profiling and exits at its results, saving the profile to perf/; given a
-// .osu, it watches Auto play the map.
+// For measuring: `--benchmark <replay>` (an .osr or .orz) watches it silently
+// while profiling and exits at its results, saving the profile to perf/;
+// given a .osu, it watches Auto play the map.
 // `--size WxH` sets the window, and `--uncapped` lifts the cap on game loop
 // passes. `--working-dir DIR` runs in DIR, which holds beatmaps/, skins/,
 // replays/ and settings.txt; without it, the game runs in its game folder,

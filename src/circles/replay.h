@@ -51,6 +51,8 @@ std::vector<u8> encode_replay(const Replay& replay);
 std::optional<Replay> decode_replay(std::span<const u8> data,
                                     bool                with_frames = true);
 
+// A replay file is an .osr, or an .orz (orz.h) holding one: reading tells
+// them apart by their contents, and writing by the path's extension.
 std::optional<Replay> read_replay(const std::filesystem::path& path,
                                   bool with_frames = true);
 bool write_replay(const std::filesystem::path& path, const Replay& replay);
