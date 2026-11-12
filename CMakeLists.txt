@@ -22,7 +22,7 @@ endif()
 # Downloaded on the first configure into build/_deps, checked against their
 # hashes, and kept there for later builds:
 # - GLFW 3.4, built into the app, so it needs nothing installed;
-# - liblzma's headers, from xz 5.8.4, for replays' (.osr) compression. The
+# - liblzma's headers, from xz 5.8.4, to decompress replays (.osr). The
 #   library is macOS's own; xz's build isn't wanted, so SOURCE_SUBDIR points
 #   where there's nothing to build.
 include(FetchContent)

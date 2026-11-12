@@ -11,6 +11,7 @@
 #include <fstream>
 #include <iterator>
 #include <lzma.h>
+#include <osu_replay_zip/osu_lzma.h>
 #include <system_error>
 
 namespace circles {
@@ -114,41 +115,12 @@ class Reader {
   bool                ok_ = true;
 };
 
-// LZMA in the "alone" (.lzma) container, with the header osu! writes: its
-// properties (lc 3, lp 0, pb 2), a 2 MiB dictionary, then the text's length.
-// The stream has no end marker. liblzma's own alone encoder writes the length
-// as unknown and ends on a marker, which a reader that takes the length from
-// the header rejects.
+// LZMA in the "alone" (.lzma) container, byte for byte as osu! compresses
+// the same text: its encoder isn't liblzma's, and the two choose different
+// matches.
 std::vector<u8> compress(std::string_view text) {
-  lzma_options_lzma options;
-  lzma_lzma_preset(&options, LZMA_PRESET_DEFAULT);
-  options.dict_size = 1 << 21;
-  options.ext_flags = 0;  // no end marker
-  options.ext_size_low = static_cast<u32>(text.size());
-  options.ext_size_high = static_cast<u32>(static_cast<u64>(text.size()) >> 32);
-  const lzma_filter filters[] = {{LZMA_FILTER_LZMA1EXT, &options},
-                                 {LZMA_VLI_UNKNOWN, nullptr}};
-  lzma_stream       stream = LZMA_STREAM_INIT;
-  if (lzma_raw_encoder(&stream, filters) != LZMA_OK)
-    return {};
-  Writer header;
-  header.put_u8(
-      static_cast<u8>((options.pb * 5 + options.lp) * 9 + options.lc));
-  header.put_i32(static_cast<i32>(options.dict_size));
-  header.put_i64(static_cast<i64>(text.size()));
-  std::vector<u8> out = header.take();
-  stream.next_in = reinterpret_cast<const u8*>(text.data());
-  stream.avail_in = text.size();
-  u8       buffer[1 << 16];
-  lzma_ret result;
-  do {
-    stream.next_out = buffer;
-    stream.avail_out = sizeof(buffer);
-    result = lzma_code(&stream, LZMA_FINISH);
-    out.insert(out.end(), buffer, buffer + sizeof(buffer) - stream.avail_out);
-  } while (result == LZMA_OK);
-  lzma_end(&stream);
-  return result == LZMA_STREAM_END ? out : std::vector<u8>();
+  return orz::osu_lzma::compress(
+      {reinterpret_cast<const u8*>(text.data()), text.size()});
 }
 
 std::optional<std::string> decompress(std::span<const u8> data) {
