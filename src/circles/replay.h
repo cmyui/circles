@@ -5,6 +5,7 @@
 // exchanged with osu! as one.
 
 #include <circles/math.h>
+#include <circles/orz.h>
 #include <circles/rules.h>
 #include <circles/types.h>
 
@@ -39,6 +40,9 @@ struct Replay {
   u32                      mods = 0;
   i64                      timestamp = 0;  // unix seconds
   std::vector<ReplayFrame> frames;
+  // How the cursors were made, when the game that recorded them knows; a
+  // replay that was read has none.
+  std::optional<OrzDevice> device;
 };
 
 // A replay as an .orz. Empty if it can't be made: a frame further than

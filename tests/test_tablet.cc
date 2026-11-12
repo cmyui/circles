@@ -39,21 +39,23 @@ constexpr circles::TabletModel kIntuosPro = {
     .max_y = 19685,
     .max_pressure = 2047};
 
+// Where a point of kIntuos, in mm, is across the area, 0 to 1 each way.
 Vec2 across(const TabletArea& area, f32 x, f32 y) {
-  return circles::map_pen(circles::tablet_mapping(area), x, y);
+  return circles::map_pen(
+      circles::tablet_mapping(area, kIntuos, {0, 0}, {1, 1}), x * 100, y * 100);
 }
 
 }  // namespace
 
 static void test_decodes_pen_reports() {
-  // In range, x 0x1234 and y 0x0567 hundredths of a mm, all the pressure.
+  // In range, x 0x1234 and y 0x0567 units, all the pressure.
   const std::array<u8, 10> in_range = {0x02, 0xe0, 0x34, 0x12, 0x67,
                                        0x05, 0xff, 0x07, 0x00, 0x00};
   PenReport                pen;
   CHECK(circles::decode_pen_report(kIntuos, in_range, 1.5, pen));
   CHECK(pen.in_range);
-  CHECK_NEAR(pen.x, 46.6f, 1e-3f);
-  CHECK_NEAR(pen.y, 13.83f, 1e-3f);
+  CHECK_EQ(pen.x, 4660.0f);
+  CHECK_EQ(pen.y, 1383.0f);
   CHECK_NEAR(pen.pressure, 100.0f, 1e-4f);
   CHECK_EQ(pen.arrived, 1.5);
 
@@ -76,8 +78,8 @@ static void test_decodes_intuos_pro_pen_reports() {
   PenReport                pen;
   CHECK(circles::decode_pen_report(kIntuosPro, in_range, 1.5, pen));
   CHECK(pen.in_range);
-  CHECK_NEAR(pen.x, 46.605f, 1e-3f);
-  CHECK_NEAR(pen.y, 13.83f, 1e-3f);
+  CHECK_EQ(pen.x, 9321.0f);
+  CHECK_EQ(pen.y, 2766.0f);
   CHECK_NEAR(pen.pressure, 1026.0f / 2047 * 100, 1e-3f);
   CHECK_EQ(pen.arrived, 1.5);
 
@@ -88,8 +90,8 @@ static void test_decodes_intuos_pro_pen_reports() {
   for (u8 id : {0x02, 0x10}) {
     corner[0] = id;
     CHECK(circles::decode_pen_report(kIntuosPro, corner, 0, pen));
-    CHECK_NEAR(pen.x, 157.48f, 1e-3f);
-    CHECK_NEAR(pen.y, 98.425f, 1e-3f);
+    CHECK_EQ(pen.x, 31496.0f);
+    CHECK_EQ(pen.y, 19685.0f);
     CHECK_NEAR(pen.pressure, 100.0f, 1e-4f);
   }
 
@@ -135,6 +137,20 @@ static void test_rotation_turns_the_area_clockwise() {
   CHECK_NEAR(above.y, 0.5f, 1e-5f);
 }
 
+static void test_maps_as_opentabletdriver_does() {
+  // The matrix osu!lazer's driver builds for a 74 x 48 mm area around
+  // (76, 48), a half turn, onto a 1728 x 1117 window: its floats, which
+  // replays recorded there give back.
+  const circles::TabletMapping m = circles::tablet_mapping(
+      {76, 48, 74, 48, 180}, kIntuos, {0, 0}, {1728, 1117});
+  CHECK_EQ(m.m11, -0.2335135042667389f);
+  CHECK_EQ(m.m22, -0.23270833492279053f);
+  CHECK_EQ(m.m12, 0.0f);
+  CHECK_EQ(m.m21, 0.0f);
+  CHECK_EQ(m.m31, 2638.70263671875f);
+  CHECK_EQ(m.m32, 1675.5f);
+}
+
 static void test_fits_the_area_on_the_surface() {
   // Already on it: unchanged.
   const TabletArea whole{76, 47.5f, 152, 95, 0};
@@ -144,8 +160,7 @@ static void test_fits_the_area_on_the_surface() {
   CHECK_NEAR(left.x, 40.0f, 1e-4f);
   CHECK_EQ(left.width, 80.0f);
   // Turned a quarter, it stands 80 mm tall: moved down from the top.
-  const TabletArea turned =
-      circles::fit_area({76, 10, 80, 45, 90}, kIntuos);
+  const TabletArea turned = circles::fit_area({76, 10, 80, 45, 90}, kIntuos);
   CHECK_NEAR(turned.y, 40.0f, 1e-3f);
   // Too big: shrunk to fit, keeping its shape, then moved within it.
   const TabletArea big = circles::fit_area({0, 0, 304, 95, 0}, kIntuos);
@@ -171,6 +186,7 @@ int main() {
   test_decodes_pen_reports();
   test_decodes_intuos_pro_pen_reports();
   test_spans_the_area();
+  test_maps_as_opentabletdriver_does();
   test_fits_the_area_on_the_surface();
   test_rotation_turns_the_area_clockwise();
   return test_result();

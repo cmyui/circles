@@ -49,6 +49,19 @@ struct Playfield {
     return {static_cast<f32>(static_cast<f64>(p.x - x) / ratio),
             static_cast<f32>(static_cast<f64>(p.y - y) / ratio)};
   }
+  // With osu!lazer's arithmetic, for a pen circles reads, as lazer reads
+  // one: a multiply and an add in single precision, by `back`.
+  struct Back {
+    f32 scale, x, y;
+  };
+  Back back() const {
+    const f32 inverse = static_cast<f32>(1 / ratio);
+    return {inverse, -x * inverse, -y * inverse};
+  }
+  Vec2 pen_to_playfield(Vec2 p) const {
+    const Back b = back();
+    return {p.x * b.scale + b.x, p.y * b.scale + b.y};
+  }
 };
 
 // Stable shortens windows squarer than 5:4 to that shape; here that game
@@ -287,7 +300,20 @@ Vec2 frame_position(const std::vector<ReplayFrame>& frames, f64 time) {
 Vec2 live_cursor(const App& app, f64 time) {
   if (app.game.mods & kAutopilot)
     return frame_position(app.game.autopilot_frames, time);
-  return playfield(app).to_playfield(app.cursor);
+  const Playfield field = playfield(app);
+  return app.cursor_from_pen ? field.pen_to_playfield(app.cursor)
+                             : field.to_playfield(app.cursor);
+}
+
+// How the pen's cursor is made right now, from its report to osu! pixels;
+// nothing while the tablet's area is turned off its axes, where each of the
+// cursor's coordinates takes both of the pen's.
+std::optional<OrzDevice> pen_device(const App& app) {
+  const TabletMapping& m = app.pen.mapping;
+  if (m.m12 != 0 || m.m21 != 0)
+    return std::nullopt;
+  const Playfield::Back b = playfield(app).back();
+  return OrzDevice{{m.m11, m.m31, b.scale, b.x}, {m.m22, m.m32, b.scale, b.y}};
 }
 
 // Where a watched replay's cursor is drawn: between its frames.
@@ -616,6 +642,9 @@ void finish(App& app) {
   if (!game.watching) {
     const char* user = std::getenv("USER");
     player = user ? user : "player";
+    // The pen's device goes with the replay if it made most of the frames.
+    const bool by_pen =
+        game.pen_frames * 2 > static_cast<i32>(game.frames.size());
     // Stable starts every replay with two frames of a hidden cursor.
     game.frames.insert(
         game.frames.begin(),
@@ -631,7 +660,8 @@ void finish(App& app) {
                      .perfect = game.max_combo >= game.health_rules.max_combo,
                      .mods = game.mods,
                      .timestamp = std::time(nullptr),
-                     .frames = std::move(game.frames)});
+                     .frames = std::move(game.frames),
+                     .device = by_pen ? game.pen_device : std::nullopt});
     if (replay_path.empty())
       show_toast(app, "Couldn't save the replay");
   }
@@ -2005,11 +2035,19 @@ void gameplay_update(App& app) {
       if (!game.audio_started && game.audio_ok)
         return;
       if (scorable || game.force_frame || game.frames.empty() ||
-          keys != game.frames.back().keys)
+          keys != game.frames.back().keys) {
         game.frames.push_back(
             {std::max<f64>(
                  time, game.frames.empty() ? time : game.frames.back().time),
              cursor, keys});
+        if (app.cursor_from_pen && !(game.mods & kAutopilot)) {
+          const auto device = pen_device(app);
+          if (game.pen_frames++ == 0)
+            game.pen_device = device;
+          else if (game.pen_device != device)
+            game.pen_device.reset();
+        }
+      }
       game.force_frame = false;
     };
     // Stable reads the keys held at each frame. Here each press and release

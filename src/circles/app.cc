@@ -596,7 +596,7 @@ void read_pen(App& app) {
   }
   pen.reports.clear();
   take_pen_reports(pen.reports);
-  if (pen.reports.empty())
+  if (pen.reports.empty() || !tablet)
     return;
   const f64 now = uptime();
   const f64 to_glfw = glfwGetTime() - now;
@@ -604,14 +604,15 @@ void read_pen(App& app) {
   Vec2 origin{0, 0}, size{app.width, app.height};
   if (app.tablet_full_screen)
     window_screen(app, origin, size);
+  pen.mapping = tablet_mapping(tablet_area(app), *tablet, origin, size);
   for (const PenReport& report : pen.reports) {
     pen.last = report.arrived;
     pen.in_range = report.in_range;
     if (report.in_range) {
-      const Vec2 across = map_pen(pen.mapping, report.x, report.y);
-      set_cursor(app,
-                 std::clamp(origin.x + across.x * size.x, 0.0f, app.width),
-                 std::clamp(origin.y + across.y * size.y, 0.0f, app.height));
+      const Vec2 at = map_pen(pen.mapping, report.x, report.y);
+      set_cursor(app, std::clamp(at.x, 0.0f, app.width),
+                 std::clamp(at.y, 0.0f, app.height));
+      app.cursor_from_pen = true;
       app.readout.pen_moves.push_back({report.arrived, now});
     }
     const bool tip = report.in_range && report.pressure > app.tablet_tip;
@@ -977,15 +978,10 @@ TabletArea tablet_area(const App& app) {
           app.tablet_rotation};
 }
 
-void update_tablet_mapping(App& app) {
-  app.pen.mapping = tablet_mapping(tablet_area(app));
-}
-
 void set_tablet_area(App& app, const TabletArea& area) {
   app.tablet_x = area.x, app.tablet_y = area.y;
   app.tablet_width = area.width, app.tablet_height = area.height;
   app.tablet_rotation = area.rotation;
-  update_tablet_mapping(app);
 }
 
 bool import_tablet_settings(App& app) {
@@ -1371,8 +1367,10 @@ void app_scroll(App& app, f64 dy) {
 }
 
 void app_cursor(App& app, f64 x, f64 y) {
-  if (!pen_aiming(app))
-    set_cursor(app, x, y);
+  if (pen_aiming(app))
+    return;
+  set_cursor(app, x, y);
+  app.cursor_from_pen = false;
 }
 
 void app_drop(App& app, std::span<const char* const> paths) {

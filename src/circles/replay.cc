@@ -212,7 +212,8 @@ std::vector<u8> encode_replay(const Replay& replay) {
     previous = time;
   }
   frames.push_back(kClosingFrame);
-  return encode_orz(osr_fields(replay), frames);
+  return encode_orz(osr_fields(replay), frames,
+                    replay.device ? &*replay.device : nullptr);
 }
 
 std::optional<Replay> decode_replay(std::span<const u8> data,

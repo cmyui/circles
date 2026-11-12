@@ -47,8 +47,8 @@ bool decode_pen_report(const TabletModel&  model,
       if (!(report[1] & 0x40))
         return false;
       pen.in_range = true;
-      pen.x = little_endian(report, 2) * model.width / model.max_x;
-      pen.y = little_endian(report, 4) * model.height / model.max_y;
+      pen.x = little_endian(report, 2);
+      pen.y = little_endian(report, 4);
       pen.pressure = little_endian(report, 6) / model.max_pressure * 100;
       return true;
     case ReportFormat::WacomIntuosPro: {
@@ -68,8 +68,8 @@ bool decode_pen_report(const TabletModel&  model,
       const i32 pressure =
           report[6] << 3 | (report[7] & 0xC0) >> 5 | (report[1] & 1);
       pen.in_range = true;
-      pen.x = x * model.width / model.max_x;
-      pen.y = y * model.height / model.max_y;
+      pen.x = static_cast<f32>(x);
+      pen.y = static_cast<f32>(y);
       pen.pressure = pressure / model.max_pressure * 100;
       return true;
     }
@@ -77,17 +77,61 @@ bool decode_pen_report(const TabletModel&  model,
   return false;
 }
 
-TabletMapping tablet_mapping(const TabletArea& a) {
-  // The pen's offset from the area's centre, turned back by the area's
-  // rotation, as a fraction of its size, from its top-left.
-  const f64     radians = a.rotation * std::numbers::pi / 180;
-  const f32     c = static_cast<f32>(std::cos(radians));
-  const f32     s = static_cast<f32>(std::sin(radians));
+namespace {
+
+// System.Numerics' Matrix3x2 product and constructors.
+TabletMapping operator*(const TabletMapping& a, const TabletMapping& b) {
   TabletMapping m;
-  m.m11 = c / a.width, m.m21 = s / a.width;
-  m.m31 = -(a.x * c + a.y * s) / a.width + 0.5f;
-  m.m12 = -s / a.height, m.m22 = c / a.height;
-  m.m32 = (a.x * s - a.y * c) / a.height + 0.5f;
+  m.m11 = a.m11 * b.m11 + a.m12 * b.m21;
+  m.m12 = a.m11 * b.m12 + a.m12 * b.m22;
+  m.m21 = a.m21 * b.m11 + a.m22 * b.m21;
+  m.m22 = a.m21 * b.m12 + a.m22 * b.m22;
+  m.m31 = a.m31 * b.m11 + a.m32 * b.m21 + b.m31;
+  m.m32 = a.m31 * b.m12 + a.m32 * b.m22 + b.m32;
+  return m;
+}
+
+TabletMapping scaling(f32 x, f32 y) {
+  return {.m11 = x, .m22 = y};
+}
+
+TabletMapping translation(f32 x, f32 y) {
+  return {.m31 = x, .m32 = y};
+}
+
+// Quarter turns are exact, as Matrix3x2.CreateRotation makes them.
+TabletMapping rotation(f32 radians) {
+  const f32 kEpsilon = 0.001f * std::numbers::pi_v<f32> / 180;
+  const f32 kPi = std::numbers::pi_v<f32>;
+  radians = std::remainder(radians, 2 * kPi);
+  f32 c, s;
+  if (radians > -kEpsilon && radians < kEpsilon)
+    c = 1, s = 0;
+  else if (radians > kPi / 2 - kEpsilon && radians < kPi / 2 + kEpsilon)
+    c = 0, s = 1;
+  else if (radians < -kPi + kEpsilon || radians > kPi - kEpsilon)
+    c = -1, s = 0;
+  else if (radians > -kPi / 2 - kEpsilon && radians < -kPi / 2 + kEpsilon)
+    c = 0, s = -1;
+  else
+    c = std::cos(radians), s = std::sin(radians);
+  return {.m11 = c, .m12 = s, .m21 = -s, .m22 = c};
+}
+
+}  // namespace
+
+TabletMapping tablet_mapping(const TabletArea&  a,
+                             const TabletModel& model,
+                             Vec2               origin,
+                             Vec2               size) {
+  TabletMapping m =
+      scaling(model.width / model.max_x, model.height / model.max_y) *
+      translation(-a.x, -a.y) *
+      rotation(static_cast<f32>(-a.rotation * std::numbers::pi / 180)) *
+      scaling(size.x / a.width, size.y / a.height) *
+      translation(origin.x + size.x / 2, origin.y + size.y / 2);
+  m.low = origin;
+  m.high = {origin.x + size.x, origin.y + size.y};
   return m;
 }
 
@@ -107,8 +151,8 @@ TabletArea fit_area(TabletArea a, const TabletModel& model) {
 }
 
 Vec2 map_pen(const TabletMapping& m, f32 x, f32 y) {
-  return {clamp01(x * m.m11 + y * m.m21 + m.m31),
-          clamp01(x * m.m12 + y * m.m22 + m.m32)};
+  return {std::clamp(x * m.m11 + y * m.m21 + m.m31, m.low.x, m.high.x),
+          std::clamp(x * m.m12 + y * m.m22 + m.m32, m.low.y, m.high.y)};
 }
 
 }  // namespace circles

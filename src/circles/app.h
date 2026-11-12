@@ -189,6 +189,10 @@ struct Gameplay {
   // Every play records its input as replay frames. Watching a replay plays
   // its frames back instead of taking input.
   std::vector<ReplayFrame> frames;
+  // The pen's frames among them, and how their cursors were made: nothing
+  // once two were made differently.
+  i32                      pen_frames = 0;
+  std::optional<OrzDevice> pen_device;
   bool                     watching = false;
   // Scrubbing a watched play: where its timeline starts (game ms), and a
   // drag along it.
@@ -441,6 +445,7 @@ struct App {
   Results                results;
 
   Vec2                   cursor{};
+  bool                   cursor_from_pen = false;  // set by the pen, read here
   f64                    cursor_moved = -1e9;  // wall seconds
   std::deque<TrailPoint> trail;
 
@@ -628,7 +633,6 @@ void gameplay_focus_lost(App& app);
 void       set_pen_direct(App& app, bool on);
 TabletArea tablet_area(const App& app);
 void       set_tablet_area(App& app, const TabletArea& area);
-void       update_tablet_mapping(App& app);
 bool import_tablet_settings(App& app);
 // A warning, if the area goes past the connected tablet's edge; empty if
 // it's on its surface, or none is connected.

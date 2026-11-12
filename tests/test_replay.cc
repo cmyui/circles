@@ -74,6 +74,40 @@ static void test_replays_round_trip() {
                0.0001f);
 }
 
+static void test_a_device_codes_its_own_positions() {
+  // A pen's cursors, each made from a whole number by the device, and one
+  // the device doesn't give.
+  const circles::OrzDevice device{{-0.2335135042667389f, 2638.70263671875f,
+                                   0.4297224283218384f, -115.28018188476562f},
+                                  {-0.23270833492279053f, 1675.5f,
+                                   0.4297224283218384f, -55.99998474121094f}};
+  const auto at = [](const circles::OrzDevice::Axis& axis, int n) {
+    const circles::f32 window = static_cast<circles::f32>(n) * axis.a + axis.z;
+    return window * axis.b + axis.c;
+  };
+  circles::Replay replay = sample_replay();
+  replay.frames.resize(2);
+  for (int i = 0; i < 400; ++i)
+    replay.frames.push_back(
+        {40 + i * 16.0,
+         {at(device.x, 8000 + i * 7 % 900), at(device.y, 5000 + i * 11 % 700)},
+         0});
+  replay.frames.push_back({40 + 400 * 16.0, {123.456f, 234.567f}, 0});
+  const auto searched = circles::encode_replay(replay);
+  replay.device = device;
+  const auto given = circles::encode_replay(replay);
+  // The same replay either way, and no larger for being told its device.
+  CHECK(given.size() <= searched.size());
+  const auto a = circles::decode_replay(searched);
+  const auto b = circles::decode_replay(given);
+  CHECK(a && b);
+  if (!a || !b)
+    return;
+  CHECK_EQ(b->frames.size(), replay.frames.size());
+  for (size_t i = 0; i < a->frames.size() && i < b->frames.size(); ++i)
+    CHECK(a->frames[i].position == b->frames[i].position);
+}
+
 static void test_listing_skips_frames() {
   const auto decoded =
       circles::decode_replay(circles::encode_replay(sample_replay()), false);
@@ -151,6 +185,7 @@ static void test_replay_files_are_imported_and_exported() {
 
 int main() {
   test_replays_round_trip();
+  test_a_device_codes_its_own_positions();
   test_listing_skips_frames();
   test_malformed_replays_are_rejected();
   test_osr_exchange_is_lossless();

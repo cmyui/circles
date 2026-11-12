@@ -85,9 +85,18 @@ namespace dspace {
 		bool operator==(const _game_state_model&) const = default;
 	};
 
-	// value = (a * k + b) / D
+	// Two float steps from a device's integer k, as osu!lazer makes a position: window = k * A + Z (a tablet driver's
+	// matrix on the tablet's count, or A 1 and Z 0 for a whole pixel), then field = window * B + C (the playfield's
+	// inverse draw matrix), each product and each sum rounded to a float. Set while B is not 0.
+	struct chain_params {
+		float A, Z, B, C;
+		bool operator==(const chain_params&) const = default;
+	};
+
+	// value = (a * k + b) / D, or chain's while that is set
 	struct rational_params {
 		int D, a, b;
+		chain_params chain;
 		bool operator==(const rational_params&) const = default;
 	};
 
@@ -204,9 +213,9 @@ namespace dspace {
 	};
 
 	// The hardware and software configuration behind a coding model (orz_setup.h): what an encode says of the player's
-	// setup, and what a caller hands back as a hint for the player's next replays. Nothing in a hint is trusted: the
-	// device it stands for is a candidate for the search, and has to fit the replay as any other does. Unknown parts
-	// are 0.
+	// setup, and what a caller hands back as a hint for the player's next replays. A hint is not trusted unless it is
+	// forced: the device it stands for is a candidate for the search, and has to fit the replay as any other does.
+	// Unknown parts are 0.
 	struct _setup {
 
 		enum class input : u8 {
@@ -214,6 +223,7 @@ namespace dspace {
 			pixels, // whole window pixels: the system cursor, or a raw mouse at sensitivity 1
 			mouse,  // raw relative movement
 			tablet, // raw absolute positions
+			lattice, // any other input, by the positions it can give (lattice): a game that is not stable says its own
 		};
 
 		input kind{};
@@ -235,18 +245,44 @@ namespace dspace {
 		// the window mapping's product rounded
 		bool x87[2]{}, unrounded_sub[2]{}, origin_unrounded[2]{}, product_rounded[2]{};
 
+		// lattice: an axis's positions are (a * k + b) / D for whole k, as float((a * k + b) / (double)D), or its chain's
+		// (chain_params): osu!lazer's, and any game's that makes positions as it does
+		rational_params lattice[2]{};
+
 		// the share of each axis's positions the model did not give: as a hint, the setup is taken again while it fits
 		// about as well
 		float missed[2]{};
+
+		// as a hint: the replay was recorded with this very setup, as the game that recorded it says. It is coded with
+		// the setup's device without a search, and a position that device does not give is escaped: a wrong setup costs
+		// size, never the replay.
+		bool force{};
 
 		bool operator==(const _setup&) const = default;
 	};
 
 	FORCEINLINE float rational_value(const axis_params& p, i64 k) {
+
+		if (const auto& c{ p.device.rational.chain }; c.B != 0.f) {
+
+			// a statement each: no step may be fused with the next
+			float w{ (float)k * c.A };
+			w = w + c.Z;
+
+			float v{ w * c.B };
+			v = v + c.C;
+
+			return v;
+		}
+
 		return (float)(((double)p.device.rational.a * (double)k + p.device.rational.b) / (double)p.device.rational.D);
 	}
 
 	FORCEINLINE i64 rational_k(const axis_params& p, float x) {
+
+		if (const auto& c{ p.device.rational.chain }; c.B != 0.f)
+			return round_i64((((double)x - c.C) / c.B - c.Z) / c.A);
+
 		return round_i64(((double)x * p.device.rational.D - p.device.rational.b) / p.device.rational.a);
 	}
 
@@ -1249,9 +1285,21 @@ namespace dspace {
 
 		if (p.device.kind == axis_mode::rational) {
 
-			write_u((u32)p.device.rational.D, o);
-			write_u((u32)p.device.rational.a, o);
-			write_u((u32)rc::zz(p.device.rational.b), o);
+			// a chain is written in place of a D of 0, which no lattice has
+			if (const auto& c{ p.device.rational.chain }; c.B != 0.f) {
+
+				write_u(0, o);
+
+				for (const float v : { c.A, c.Z, c.B, c.C })
+					o.write_float(v);
+
+			} else {
+
+				write_u((u32)p.device.rational.D, o);
+				write_u((u32)p.device.rational.a, o);
+				write_u((u32)rc::zz(p.device.rational.b), o);
+
+			}
 
 		}
 
@@ -1303,8 +1351,23 @@ namespace dspace {
 		if (p.device.kind == axis_mode::rational) {
 
 			p.device.rational.D = (int)read_u(in);
-			p.device.rational.a = (int)read_u(in);
-			p.device.rational.b = (int)rc::unzz(read_u(in));
+
+			if (p.device.rational.D == 0) {
+
+				auto& c{ p.device.rational.chain };
+
+				for (float* v : { &c.A, &c.Z, &c.B, &c.C })
+					*v = in.read_float();
+
+				if (!std::isfinite(c.A) || !std::isfinite(c.Z) || !std::isfinite(c.B) || !std::isfinite(c.C) || c.A == 0.f || c.B == 0.f)
+					return false;
+
+			} else {
+
+				p.device.rational.a = (int)read_u(in);
+				p.device.rational.b = (int)rc::unzz(read_u(in));
+
+			}
 
 		}
 
