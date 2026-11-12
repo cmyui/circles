@@ -1,10 +1,10 @@
 # circles
 
-An osu!-style rhythm game in C++20 and Metal that plays real osu!standard
-beatmaps, parsed with
+A circle-clicking rhythm game in C++20 and Metal that plays `.osu` beatmaps
+of the standard mode, parsed with
 [fosu](https://github.com/cmyui/fast-osu-beatmap-parser).
 
-Gameplay follows osu!stable's own code. fosu's stable mode works out
+Gameplay follows the stable client's own code. fosu's stable mode works out
 stable's slider paths, timing and stacking; input and note lock, hit
 windows, slider and spinner scoring, combo, health, and score are ported
 here. Plays score as they would there, and stable replays play back with
@@ -21,7 +21,7 @@ circles runs on Macs with Apple silicon and macOS 13 or later.
    or a registered developer. Open System Settings, then Privacy &
    Security, and choose **Open Anyway** for circles.
 3. With no beatmaps, it downloads nine starter sets, about 50 MB, from
-   cmyui.xyz: songs licensed to osu! (Featured Artists). They download
+   cmyui.xyz: Featured Artist songs. They download
    smallest first and each is playable once it's in. Drop `.osz` beatmap
    archives on its window to add more.
 
@@ -36,9 +36,8 @@ such as Input Monitoring.
 
 macOS only: rendering uses Metal. Needs CMake and Apple's command line
 tools (`xcode-select --install`, then `brew install cmake`). The first build
-downloads GLFW, built into the app, and liblzma's headers (replays' LZMA
-compression uses macOS's own liblzma) into `build/_deps`, where later
-builds find them.
+downloads GLFW, built into the app, into `build/_deps`, where later builds
+find it.
 
 ```sh
 make run     # build into build/ and start the game
@@ -213,11 +212,11 @@ The Tablet page sets:
 
 Put `.osz` files or extracted beatmap folders in `beatmaps/`. At startup each
 `.osz` is extracted into a folder named after it (the archive is kept), and
-every osu!standard difficulty is listed; other modes are skipped.
+every standard-mode difficulty is listed; other modes are skipped.
 
 ## Skins
 
-Put osu! skins (`.osk` files or skin folders) in `skins/`, or drop `.osk`
+Put skins (`.osk` files or skin folders) in `skins/`, or drop `.osk`
 files on the window, on the main menu or in song select. A newly added or
 dropped skin becomes active. F9, or **Skin** in settings (Ctrl+O), steps
 through the skins and the built-in look. Skins cover gameplay: hit objects,
@@ -226,18 +225,27 @@ Elements a skin leaves out keep the built-in look.
 
 ## Replays
 
-Every finished play is saved to `replays/` as an osu!-compatible `.osr`, so
-osu! can open it too. The results screen's Watch button (or W) plays it back;
-song select lists the selected difficulty's replays, best first, and clicking
-one plays it back. Replays from osu! dropped into `replays/` are listed once
-their beatmap is in `beatmaps/`: a replay names its beatmap by the MD5 hash of
-the `.osu` file, so it needs that exact version. Space skips a replay's intro
-and Esc pauses it.
+Every finished play is saved to `replays/` as an `.orz`: an `.osr` replay
+compressed losslessly by
+[osu_replay_zip](https://github.com/rumoi/osu_replay_zip). The results
+screen's Watch button (or W) plays a replay back; song select lists the
+selected difficulty's replays, best first, and clicking one plays it back.
+Space skips a replay's intro and Esc pauses it.
+
+`.osr` replays go in and out:
+
+- **Export.** F2 on the results screen writes the replay to `exports/` as
+  both an `.osr`, for stable to open, and an `.orz`.
+- **Import.** Drop an `.osr` or `.orz` on the window, or put it in
+  `replays/`. An `.osr` is kept as the `.orz` that gives it back byte for
+  byte; one put in `replays/` is removed once that `.orz` is written. A
+  replay is listed once its beatmap is in `beatmaps/`: it names its beatmap
+  by the MD5 hash of the `.osu` file, so it needs that exact version.
 
 ## Mods
 
-F1, or the Mods button in song select, opens mod select. It has osu!stable's
-osu!standard mods except Target Practice, with stable's keys, exclusions and
+F1, or the Mods button in song select, opens mod select. It has stable's
+standard-mode mods except Target Practice, with stable's keys, exclusions and
 score multipliers:
 
 | Key | Mod | Effect |
@@ -254,7 +262,7 @@ score multipliers:
 | X | Autopilot | The cursor moves itself; you tap |
 | C | Spun Out | Spinners spin themselves |
 | V | Auto, then Cinema | Watch a perfect play; Cinema shows only the background |
-| B | Score V2 | osu!'s newer scoring, out of 1,000,000 |
+| B | Score V2 | The newer scoring, out of 1,000,000 |
 
 Pressing a key again steps a two-mod button to its second mod, then off; 1
 resets. The song select preview plays at the chosen speed, and the stats show
@@ -288,6 +296,6 @@ and F2 for a random song.
   skins have, with flat, drum-like hits. Beatmaps' own hitsound samples,
   storyboards and videos are ignored.
 - Skins don't restyle the menus, song select, pause screen or input overlay.
-- osu!stable scores a replay's spinners partly on its own display frames, so
+- Stable scores a replay's spinners partly on its own display frames, so
   watching a stable replay can differ from stable by a spinner bonus.
 - There are no per-beatmap offsets; `-` and `=` set one global offset.

@@ -19,12 +19,9 @@ if(NOT APPLE)
   message(FATAL_ERROR "circles currently supports macOS only")
 endif()
 
-# Downloaded on the first configure into build/_deps, checked against their
-# hashes, and kept there for later builds:
-# - GLFW 3.4, built into the app, so it needs nothing installed;
-# - liblzma's headers, from xz 5.8.4, to decompress replays (.osr). The
-#   library is macOS's own; xz's build isn't wanted, so SOURCE_SUBDIR points
-#   where there's nothing to build.
+# GLFW 3.4, downloaded on the first configure into build/_deps, checked
+# against its hash, and kept there for later builds. It's built into the app,
+# so it needs nothing installed.
 include(FetchContent)
 set(GLFW_BUILD_EXAMPLES OFF)
 set(GLFW_BUILD_TESTS OFF)
@@ -34,16 +31,16 @@ FetchContent_Declare(glfw
   URL https://github.com/glfw/glfw/releases/download/3.4/glfw-3.4.zip
   URL_HASH SHA256=b5ec004b2712fd08e8861dc271428f048775200a2df719ccf575143ba749a3e9
   SYSTEM)
-FetchContent_Declare(xz
-  URL https://github.com/tukaani-project/xz/releases/download/v5.8.4/xz-5.8.4.tar.gz
-  URL_HASH SHA256=0014c7886930454fe8bd4228665b51af55eeae560ea135c9c4cd33f55b2591d9
-  SOURCE_SUBDIR src/liblzma/api)
-FetchContent_MakeAvailable(glfw xz)
+FetchContent_MakeAvailable(glfw)
 
-# Single-header libraries (miniaudio, stb), compiled once as C. Their headers
-# are system includes so our warnings don't apply to them.
-add_library(circles_third_party STATIC src/circles/third_party.c)
-target_include_directories(circles_third_party SYSTEM PUBLIC third_party)
+# Single-header libraries (miniaudio, stb) and the LZMA decoder osu_replay_zip
+# reads replay data with, compiled once as C. Their headers are system
+# includes so our warnings don't apply to them.
+add_library(circles_third_party STATIC
+  src/circles/third_party.c
+  third_party/osu_replay_zip/Lib/LzmaDec.c)
+target_include_directories(circles_third_party SYSTEM PUBLIC
+  third_party third_party/osu_replay_zip/Lib)
 target_compile_definitions(circles_third_party PRIVATE MA_NO_RUNTIME_LINKING)
 target_link_libraries(circles_third_party PUBLIC
   "-framework AudioToolbox" "-framework CoreAudio" "-framework CoreFoundation")
@@ -65,6 +62,7 @@ add_library(circles_core STATIC
   src/circles/menu.cc
   src/circles/mod_select.cc
   src/circles/mods.cc
+  src/circles/orz.cc
   src/circles/profiler.cc
   src/circles/profiler_macos.mm
   src/circles/replay.cc
@@ -85,10 +83,8 @@ target_compile_options(circles_core PRIVATE -Wall -Wextra)
 # osu!stable computes one floating-point operation at a time; fused
 # multiply-adds would change its judgements' arithmetic.
 target_compile_options(circles_core PUBLIC -ffp-contract=off)
-target_include_directories(circles_core SYSTEM PRIVATE
-  ${xz_SOURCE_DIR}/src/liblzma/api)
 target_link_libraries(circles_core PUBLIC
-  circles_third_party glfw lzma "-framework AppKit"
+  circles_third_party glfw "-framework AppKit"
   "-framework Metal" "-framework QuartzCore" "-framework IOSurface"
   "-framework IOKit")
 

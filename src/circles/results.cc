@@ -100,7 +100,7 @@ void draw_histogram(App& app, f32 x, f32 y, f32 w, f32 h, f32 s) {
 void open_score(App& app, i32 map, const ReplayEntry& entry) {
   const Replay& replay = entry.replay;
   play_sound(app.audio, Sound::MenuClick, 0.7f);
-  // An .osr holds the score but not its hit errors; judging it finds them.
+  // A replay holds the score but not its hit errors; judging it finds them.
   judge_replay(app, map, entry.path.string());
   app.results = Results{
       .map_index = map,
@@ -245,6 +245,8 @@ void results_key(App& app, i32 key, i32 action) {
     activate(app, kRetry);
   else if (key == GLFW_KEY_W)
     activate(app, kWatch);
+  else if (key == GLFW_KEY_F2 && !app.results.replay_path.empty())
+    export_saved_replay(app, app.results.replay_path);
   else if (key == GLFW_KEY_ESCAPE || key == GLFW_KEY_ENTER ||
            key == GLFW_KEY_KP_ENTER)
     activate(app, kBack);

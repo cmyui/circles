@@ -15,7 +15,7 @@ circles::App& app_of(GLFWwindow* window) {
   return *static_cast<circles::App*>(glfwGetWindowUserPointer(window));
 }
 
-// For measuring: `--benchmark <replay.osr>` watches a replay silently while
+// For measuring: `--benchmark <replay.orz>` watches a replay silently while
 // profiling and exits at its results, saving the profile to perf/; given a
 // .osu, it watches Auto play the map.
 // `--size WxH` sets the window, and `--uncapped` lifts the cap on game loop
@@ -46,7 +46,7 @@ bool parse_options(int argc, char** argv, Options& options) {
     else {
       std::fprintf(stderr,
                    "usage: circles [--working-dir DIR] [--benchmark "
-                   "replay.osr|map.osu] [--size WxH] [--uncapped]\n");
+                   "replay.orz|map.osu] [--size WxH] [--uncapped]\n");
       return false;
     }
   }

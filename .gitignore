@@ -8,4 +8,5 @@ skins/*
 settings.txt
 replays/*
 !replays/.gitkeep
+exports/
 perf/

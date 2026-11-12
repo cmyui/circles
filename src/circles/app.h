@@ -372,8 +372,9 @@ struct App {
   f64  audio_offset = 0;
   // Replays in replays/, and the one gameplay should play back next.
   std::vector<ReplayEntry> replays;
-  // Beatmap and skin archives dropped on the window, awaiting import.
-  std::vector<std::string> dropped, dropped_skins;
+  // Beatmap archives, skin archives and replays dropped on the window,
+  // awaiting import.
+  std::vector<std::string> dropped, dropped_skins, dropped_replays;
   // Starter beatmaps for an empty library, downloading one by one into
   // beatmaps/ (see download_files); each imports once saved.
   struct Starters {
@@ -469,8 +470,8 @@ void app_mouse_button(App& app, i32 button, i32 action);
 void app_scroll(App& app, f64 dy);
 void app_cursor(App& app, f64 x, f64 y);
 void app_focus(App& app, bool focused);
-// Files dropped on the window: .osz beatmap archives and .osk skins are
-// imported.
+// Files dropped on the window: .osz beatmap archives, .osk skins and replays
+// (.osr or .orz) are imported.
 void app_drop(App& app, std::span<const char* const> paths);
 
 // download_macos.mm
@@ -530,8 +531,11 @@ void save_settings(const App& app);
 // Writes `replay` of `map` to replays/ and lists it. Returns its path, or
 // nothing if it couldn't be written.
 std::string save_replay(App& app, i32 map, Replay replay);
+// Writes the replay at `path` to exports/, as an .osr for osu! and as an
+// .orz, and says so.
+void export_saved_replay(App& app, const std::string& path);
 // The local leaderboard of `map`: its replays, best score first. The
-// replays folder is the score store, each .osr holding its score. If it
+// replays folder is the score store, each replay holding its score. If it
 // outgrows scanning at startup, or scores need data an .osr can't hold, a
 // database (e.g. SQLite) may be worth adding.
 std::vector<const ReplayEntry*> map_replays(const App& app, i32 map);
