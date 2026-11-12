@@ -1865,7 +1865,7 @@ bool load_gameplay(App&        app,
   // Autopilot's cursor follows one.
   if (!game.watching && game.mods & kAutoplay) {
     game.watching = true;
-    game.replay_player = "osu!";
+    game.replay_player = "circles";
     game.frames = autoplay_frames(game);
   } else if (!game.watching && game.mods & kAutopilot) {
     game.autopilot_frames = autoplay_frames(game);

@@ -21,7 +21,7 @@ from upstream in these ways:
   replay data, makes.
 - **Replay data with no size in its LZMA header** is read
   (`decompress_osr_string`, `orz_shared.h`), ending on its end marker.
-  Replays circles saved before it used osu!'s LZMA encoder are like this.
+  Replays circles saved before it used stable's LZMA encoder are like this.
 - **macOS 13.** libc++'s floating-point `std::from_chars` needs macOS 26 and
   `std::to_chars` 13.3; the six calls to them (in `orz_decimal.h`,
   `orz_dotnet.h`, `orz_life.h` and `orz_text.h`) go to stand-ins in
