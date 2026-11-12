@@ -80,7 +80,7 @@ const TabletModel* find_tablet(u16 vendor, u16 product, u32 report_size);
 struct PenReport {
   f64  arrived = 0;  // uptime seconds, as macOS stamped its arrival
   bool in_range = false;
-  f32  x = 0, y = 0;  // mm from the surface's top-left
+  f32  x = 0, y = 0;  // from the surface's top-left, in the tablet's units
   f32  pressure = 0;  // percent of the most the pen reads
 };
 // Decodes one of `model`'s reports; false if it says nothing about the pen.
@@ -98,16 +98,27 @@ struct TabletArea {
   bool operator==(const TabletArea&) const = default;
 };
 
-// From mm on the tablet to a position across the area, 0 to 1 each way:
-// an affine transform, row vectors as in System.Numerics' Matrix3x2.
+// From a pen report's position to a point of what the area maps onto: an
+// affine transform, row vectors as in System.Numerics' Matrix3x2, held
+// within `low` and `high`.
 struct TabletMapping {
-  f32 m11 = 1, m12 = 0, m21 = 0, m22 = 1, m31 = 0, m32 = 0;
+  f32  m11 = 1, m12 = 0, m21 = 0, m22 = 1, m31 = 0, m32 = 0;
+  Vec2 low{0, 0}, high{1, 1};
+  bool operator==(const TabletMapping&) const = default;
 };
-TabletMapping tablet_mapping(const TabletArea& area);
+// `area` of `model` onto the rectangle at `origin` of `size`. The matrix is
+// OpenTabletDriver's, built by the same steps in single precision, so a
+// position is the float osu!lazer makes from the same report: the tablet's
+// units to mm, the area's centre to the origin, its rotation undone, mm to
+// the rectangle's size, and the origin to the rectangle's centre.
+TabletMapping tablet_mapping(const TabletArea&  area,
+                             const TabletModel& model,
+                             Vec2               origin,
+                             Vec2               size);
 // The area, kept on `model`'s surface: shrunk, keeping its shape, if its
 // turned bounds don't fit, then moved within it.
 TabletArea fit_area(TabletArea area, const TabletModel& model);
-// Where the pen is across the area, clamped to it.
+// Where a report's position maps, held within the rectangle.
 Vec2 map_pen(const TabletMapping& mapping, f32 x, f32 y);
 
 // Platform glue (tablet_macos.mm).
@@ -130,9 +141,9 @@ void take_pen_reports(std::vector<PenReport>& reports);
 // it's a supported tablet's pen interface; a report from one; and devices
 // leaving.
 const TabletModel* tablet_device(void* device);
-void               tablet_report(const TabletModel& model,
-                                 std::span<const u8> report,
-                                 f64                 arrived);
-void               tablet_removed(void* device);
+void tablet_report(const TabletModel&  model,
+                   std::span<const u8> report,
+                   f64                 arrived);
+void tablet_removed(void* device);
 
 }  // namespace circles

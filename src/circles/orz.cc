@@ -11,11 +11,22 @@ namespace circles {
 static_assert(sizeof(OrzFrame) == sizeof(orz::_osr_frame));
 
 std::vector<u8> encode_orz(std::span<const u8>       osr_fields,
-                           std::span<const OrzFrame> frames) {
+                           std::span<const OrzFrame> frames,
+                           const OrzDevice*          device) {
   std::vector<orz::_osr_frame> list(frames.size());
   if (!frames.empty())
     std::memcpy(list.data(), frames.data(), frames.size_bytes());
-  orz::orz_state  state;
+  orz::orz_state state;
+  if (device) {
+    orz::dspace::_setup setup{};
+    setup.kind = orz::dspace::_setup::input::lattice;
+    setup.lattice[0].chain = {device->x.a, device->x.z, device->x.b,
+                              device->x.c};
+    setup.lattice[1].chain = {device->y.a, device->y.z, device->y.b,
+                              device->y.c};
+    setup.force = true;
+    state.hints.push_back(setup);
+  }
   std::vector<u8> out;
   orz::osr_frames_to_orz(osr_fields, list, out, state);
   return out;

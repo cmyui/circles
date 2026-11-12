@@ -97,7 +97,6 @@ void pen_changed(App& app) {
 
 void area_changed(App& app) {
   app.tablet_area_set = true;
-  update_tablet_mapping(app);
 }
 
 void fit_area_to_tablet(App& app) {
