@@ -4,10 +4,10 @@ A circle-clicking rhythm game in C++20 and Metal that plays `.osu` beatmaps
 of the standard mode, parsed with
 [fosu](https://github.com/cmyui/fast-osu-beatmap-parser).
 
-Gameplay follows the stable client's own code. fosu's stable mode works out
+Gameplay matches the stable client's. fosu's stable mode works out
 stable's slider paths, timing and stacking; input and note lock, hit
-windows, slider and spinner scoring, combo, health, and score are ported
-here. Plays score as they would there, and stable replays play back with
+windows, slider and spinner scoring, combo, health, and score are worked
+out here. Plays score as they would there, and stable replays play back with
 the same judgements.
 
 ## Play
